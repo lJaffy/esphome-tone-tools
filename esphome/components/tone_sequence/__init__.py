@@ -42,10 +42,12 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ToneSequenceComponent),
-            cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
+            cv.Optional(
+                CONF_MICROPHONE, default={}
+            ): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
-            ),
+            ), 
             cv.Required(CONF_PASSIVE): cv.boolean,
             cv.Optional(CONF_WINDOW_SIZE, default=1024): cv.int_range(min=64, max=4096),
             cv.Optional(CONF_TICK_INTERVAL, default="100ms"): cv.All(
