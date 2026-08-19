@@ -15,7 +15,7 @@ from esphome.const import (
     UNIT_HERTZ,
 )
 
-AUTO_LOAD = ["audio"]
+AUTO_LOAD = ["audio", "sensor"]
 CODEOWNERS = ["@lJaffy"]
 DEPENDENCIES = ["microphone"]
 
