@@ -5,6 +5,7 @@ import esphome.codegen as cg
 from esphome.components import binary_sensor, microphone
 import esphome.config_validation as cv
 from esphome.const import (
+    CONF_DURATION,
     CONF_ID,
     CONF_MICROPHONE,
     CONF_PATTERN,
@@ -21,12 +22,12 @@ DEPENDENCIES = ["microphone"]
 
 CONF_PASSIVE = "passive"
 CONF_TICK_INTERVAL = "tick_interval"
-CONF_PATTERN_DURATION = "pattern_duration"
+CONF_MIN = "min"
+CONF_MAX = "max"
 CONF_DETECTED = "detected"
 CONF_RELEASE_TIME = "release_time"
 CONF_DOMINANCE_DB = "dominance_db"
 CONF_GUARD_OFFSET = "guard_offset"
-CONF_MIN_MATCH_SPAN = "min_match_span"
 CONF_DETECTORS = "detectors"
 
 tone_sequence_ns = cg.esphome_ns.namespace("tone_sequence")
@@ -35,21 +36,46 @@ StartAction = tone_sequence_ns.class_("StartAction", automation.Action)
 StopAction = tone_sequence_ns.class_("StopAction", automation.Action)
 
 
+# ── Duration (min / max expected span of the whole pattern) ──
+
+
+def _validate_duration(value):
+    min_ms = value[CONF_MIN].total_milliseconds
+    max_ms = value[CONF_MAX].total_milliseconds
+    if min_ms > max_ms:
+        raise cv.Invalid(
+            f"Duration 'min' ({min_ms}ms) must not exceed 'max' ({max_ms}ms)"
+        )
+    return value
+
+
+DURATION_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.Required(CONF_MIN): cv.positive_time_period_milliseconds,
+            cv.Required(CONF_MAX): cv.positive_time_period_milliseconds,
+        }
+    ),
+    _validate_duration,
+)
+
+
 # ── Per-detector schema ──
 
 DETECTOR_SCHEMA = cv.Schema(
     {
+        # Pattern is a list of "steps"; each step is a chord (1+ frequencies).
+        # A single-frequency chord [440] behaves like the old single-tone entry.
         cv.Required(CONF_PATTERN): cv.All(
-            cv.ensure_list(cv.frequency),
+            cv.ensure_list(
+                cv.All(
+                    cv.ensure_list(cv.frequency),
+                    cv.Length(min=1, max=8),
+                )
+            ),
             cv.Length(min=2, max=32),
         ),
-        cv.Optional(CONF_PATTERN_DURATION, default="2s"): cv.All(
-            cv.positive_time_period_milliseconds,
-            cv.Range(
-                min=cv.TimePeriod(milliseconds=200),
-                max=cv.TimePeriod(seconds=60),
-            ),
-        ),
+        cv.Required(CONF_DURATION): DURATION_SCHEMA,
         cv.Optional(CONF_TOLERANCE, default="50Hz"): cv.All(
             cv.frequency,
             cv.Range(min=5, max=500),
@@ -62,13 +88,6 @@ DETECTOR_SCHEMA = cv.Schema(
         ),
         cv.Optional(CONF_GUARD_OFFSET, default=150): cv.All(
             cv.positive_int, cv.Range(min=20, max=500)
-        ),
-        cv.Optional(CONF_MIN_MATCH_SPAN): cv.All(
-            cv.positive_time_period_milliseconds,
-            cv.Range(
-                min=cv.TimePeriod(milliseconds=100),
-                max=cv.TimePeriod(seconds=60),
-            ),
         ),
         cv.Required(CONF_DETECTED): binary_sensor.binary_sensor_schema(),
         cv.Optional(CONF_RELEASE_TIME, default="3s"): cv.All(
@@ -130,27 +149,24 @@ async def to_code(config):
         cg.add(var.add_detector())  # returns an int index
 
     for i, det_cfg in enumerate(config[CONF_DETECTORS]):
-        tones = det_cfg[CONF_PATTERN]
-        tones_init = ", ".join(f"{float(t)}f" for t in tones)
+        chords = det_cfg[CONF_PATTERN]  # list of lists of frequencies
 
-        # Pattern tones
-        cg.add(
-            var.detector(i).set_pattern(
-                cg.RawExpression(f"std::vector<float>{{{tones_init}}}")
-            )
-        )
-        cg.add(var.detector(i).set_pattern_duration(det_cfg[CONF_PATTERN_DURATION]))
+        # Build C++ nested-vector initializer: {{{440.0f, 6000.0f}}, {{905.0f, 2000.0f}}}
+        chord_parts = []
+        for chord in chords:
+            freq_strs = ", ".join(f"{float(f)}f" for f in chord)
+            chord_parts.append("{" + freq_strs + "}")
+        chords_cstr = "std::vector<std::vector<float>>{" + ", ".join(chord_parts) + "}"
+
+        cg.add(var.detector(i).set_pattern(cg.RawExpression(chords_cstr)))
+
+        # Expected span of the whole pattern (first → last chord)
+        cg.add(var.detector(i).set_min_duration_ms(det_cfg[CONF_DURATION][CONF_MIN]))
+        cg.add(var.detector(i).set_max_duration_ms(det_cfg[CONF_DURATION][CONF_MAX]))
         cg.add(var.detector(i).set_tolerance_hz(det_cfg[CONF_TOLERANCE]))
         cg.add(var.detector(i).set_threshold_db(det_cfg[CONF_THRESHOLD]))
         cg.add(var.detector(i).set_dominance_db(det_cfg[CONF_DOMINANCE_DB]))
         cg.add(var.detector(i).set_guard_offset_hz(det_cfg[CONF_GUARD_OFFSET]))
-
-        # min_match_span defaults to 75 % of pattern_duration if not set
-        if det_cfg.get(CONF_MIN_MATCH_SPAN) is not None:
-            cg.add(var.detector(i).set_min_match_span_ms(det_cfg[CONF_MIN_MATCH_SPAN]))
-        else:
-            pgm = f"static_cast<uint32_t>({det_cfg[CONF_PATTERN_DURATION].total_milliseconds} * 0.75f)"
-            cg.add(var.detector(i).set_min_match_span_ms(cg.RawExpression(pgm)))
 
         detected = await binary_sensor.new_binary_sensor(det_cfg[CONF_DETECTED])
         cg.add(var.detector(i).set_detected_sensor(detected))

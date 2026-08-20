@@ -19,22 +19,23 @@ namespace esphome::tone_sequence {
 // ──────────────────────────────────────────────
 struct Detector {
   // ── Config (set from to_code) ──
-  std::vector<float> pattern_tones_;
-  uint32_t pattern_duration_ms_{2000};
+  /// Each inner vector is one "step" in the sequence (a chord of 1+ frequencies).
+  std::vector<std::vector<float>> pattern_chords_;
+  uint32_t min_duration_ms_{1500};
+  uint32_t max_duration_ms_{3000};
   float tolerance_hz_{50.0f};
   float threshold_db_{-50.0f};
   uint32_t release_time_ms_{3000};
   float dominance_db_{6.0f};
   uint16_t guard_offset_hz_{150};
-  uint32_t min_match_span_ms_{1500};
   binary_sensor::BinarySensor *detected_sensor_{nullptr};
 
   // ── Frequency mapping (populated during setup) ──
-  // Maps each pattern tone index → global Goertzel filter index
-  std::vector<uint32_t> tone_filter_indices_;
-  // Indices of guard-band filters in the global array
+  /// chord_filter_indices_[step] = list of global Goertzel indices for each freq in that chord
+  std::vector<std::vector<uint32_t>> chord_filter_indices_;
+  /// Global indices of guard-band filters for this detector
   std::vector<uint32_t> guard_filter_indices_;
-  // Guard frequencies used to build the global set
+  /// Guard frequencies used to build the global set
   std::vector<float> guard_freqs_;
 
   // ── Pattern state machine ──
@@ -46,18 +47,25 @@ struct Detector {
   bool detected_latched_{false};
 
   // ── Methods ──
-  void set_pattern(const std::vector<float> &tones) { this->pattern_tones_ = tones; }
-  void set_pattern_duration(uint32_t ms) { this->pattern_duration_ms_ = ms; }
+  void set_pattern(const std::vector<std::vector<float>> &chords) { this->pattern_chords_ = chords; }
+  void set_min_duration_ms(uint32_t ms) { this->min_duration_ms_ = ms; }
+  void set_max_duration_ms(uint32_t ms) { this->max_duration_ms_ = ms; }
   void set_tolerance_hz(float hz) { this->tolerance_hz_ = hz; }
   void set_threshold_db(float db) { this->threshold_db_ = db; }
   void set_release_time(uint32_t ms) { this->release_time_ms_ = ms; }
   void set_dominance_db(float db) { this->dominance_db_ = db; }
   void set_guard_offset_hz(uint16_t hz) { this->guard_offset_hz_ = hz; }
-  void set_min_match_span_ms(uint32_t ms) { this->min_match_span_ms_ = ms; }
   void set_detected_sensor(binary_sensor::BinarySensor *s) { this->detected_sensor_ = s; }
 
+  /// Returns true if every frequency in chord[step] is above threshold AND the
+  /// chord peak dominates the guard average. Sets peak_db to the strongest freq.
+  bool chord_present_(const float *spectrum_db, uint8_t step, float &peak_db, float guard_avg_db) const;
+
+  /// Log a human-readable description of a chord (e.g. "[440.0, 6000.0] Hz").
+  void log_chord_(uint8_t step) const;
+
   // State-machine methods
-  void evaluate_pattern_(float dominant_hz, float peak_db, const float *spectrum_db, uint32_t num_global_filters);
+  void evaluate_pattern_(const float *spectrum_db, uint32_t num_global_filters, float guard_avg_db);
   void latch_detection_(uint32_t elapsed_ms);
   void reset_pattern_();
   void reset_all_() {
@@ -106,7 +114,7 @@ class ToneSequenceComponent : public Component {
   /// Averages accum[] into dBFS spectrum, then evaluates every detector.
   void emit_tick_();
 
-  /// Build the union of all frequencies and map each detector's tones/guards
+  /// Build the union of all frequencies and map each detector's chords/guards
   /// to indices in the global filter array.
   void build_frequency_map_();
 
