@@ -10,7 +10,6 @@ from esphome.const import (
     CONF_MICROPHONE,
     CONF_PATTERN,
     CONF_THRESHOLD,
-    CONF_TOLERANCE,
     CONF_WINDOW_SIZE,
     PLATFORM_ESP32,
 )
@@ -25,9 +24,6 @@ CONF_TICK_INTERVAL = "tick_interval"
 CONF_MIN = "min"
 CONF_MAX = "max"
 CONF_DETECTED = "detected"
-CONF_RELEASE_TIME = "release_time"
-CONF_DOMINANCE_DB = "dominance_db"
-CONF_GUARD_OFFSET = "guard_offset"
 CONF_DETECTORS = "detectors"
 
 tone_sequence_ns = cg.esphome_ns.namespace("tone_sequence")
@@ -76,27 +72,10 @@ DETECTOR_SCHEMA = cv.Schema(
             cv.Length(min=2, max=32),
         ),
         cv.Required(CONF_DURATION): DURATION_SCHEMA,
-        cv.Optional(CONF_TOLERANCE, default="50Hz"): cv.All(
-            cv.frequency,
-            cv.Range(min=5, max=500),
-        ),
         cv.Optional(CONF_THRESHOLD, default=-50.0): cv.All(
             cv.float_, cv.Range(min=-80.0, max=0.0)
         ),
-        cv.Optional(CONF_DOMINANCE_DB, default=6.0): cv.All(
-            cv.positive_float, cv.Range(min=0.0, max=30.0)
-        ),
-        cv.Optional(CONF_GUARD_OFFSET, default=150): cv.All(
-            cv.positive_int, cv.Range(min=20, max=500)
-        ),
         cv.Required(CONF_DETECTED): binary_sensor.binary_sensor_schema(),
-        cv.Optional(CONF_RELEASE_TIME, default="3s"): cv.All(
-            cv.positive_time_period_milliseconds,
-            cv.Range(
-                min=cv.TimePeriod(milliseconds=500),
-                max=cv.TimePeriod(minutes=5),
-            ),
-        ),
     }
 )
 
@@ -159,18 +138,12 @@ async def to_code(config):
         chords_cstr = "std::vector<std::vector<float>>{" + ", ".join(chord_parts) + "}"
 
         cg.add(var.detector(i).set_pattern(cg.RawExpression(chords_cstr)))
-
-        # Expected span of the whole pattern (first → last chord)
         cg.add(var.detector(i).set_min_duration_ms(det_cfg[CONF_DURATION][CONF_MIN]))
         cg.add(var.detector(i).set_max_duration_ms(det_cfg[CONF_DURATION][CONF_MAX]))
-        cg.add(var.detector(i).set_tolerance_hz(det_cfg[CONF_TOLERANCE]))
         cg.add(var.detector(i).set_threshold_db(det_cfg[CONF_THRESHOLD]))
-        cg.add(var.detector(i).set_dominance_db(det_cfg[CONF_DOMINANCE_DB]))
-        cg.add(var.detector(i).set_guard_offset_hz(det_cfg[CONF_GUARD_OFFSET]))
 
         detected = await binary_sensor.new_binary_sensor(det_cfg[CONF_DETECTED])
         cg.add(var.detector(i).set_detected_sensor(detected))
-        cg.add(var.detector(i).set_release_time(det_cfg[CONF_RELEASE_TIME]))
 
 
 # ── Actions ──

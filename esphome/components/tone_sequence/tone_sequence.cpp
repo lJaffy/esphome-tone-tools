@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
-#include <set>
 
 namespace esphome::tone_sequence {
 
@@ -19,7 +18,6 @@ static const char *const TAG = "tone_sequence";
 static const uint32_t MAX_FILL_DURATION_MS = 30;
 static const uint32_t RING_BUFFER_DURATION_MS = 120;
 static const uint32_t MAX_FRAMES_PER_TICK = 16;
-static const uint32_t DIAG_INTERVAL_MS = 5000;
 
 // ──────────────────────────────────────────────
 //  Configuration
@@ -40,11 +38,8 @@ void ToneSequenceComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "    Detector[%lu]:", (unsigned long) d);
     ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", det.min_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", det.max_duration_ms_);
-    ESP_LOGCONFIG(TAG, "      Tolerance: ±%.1f Hz", det.tolerance_hz_);
     ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB", det.threshold_db_);
-    ESP_LOGCONFIG(TAG, "      Dominance: %.1f dB", det.dominance_db_);
-    ESP_LOGCONFIG(TAG, "      Guard Offset: %" PRIu16 " Hz", det.guard_offset_hz_);
-    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms", det.release_time_ms_);
+    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", det.release_time_ms_);
     ESP_LOGCONFIG(TAG, "      Chords (%lu steps):", (unsigned long) det.pattern_chords_.size());
     for (size_t s = 0; s < det.pattern_chords_.size(); ++s) {
       ESP_LOGCONFIG(TAG, "        [%u]:", (unsigned) s);
@@ -76,38 +71,6 @@ void ToneSequenceComponent::setup() {
     return;
   }
 
-  // ── Build each detector's guard frequencies (one pair per unique freq in all chords) ──
-  for (auto &det : this->detectors_) {
-    det.guard_freqs_.clear();
-    for (const auto &chord : det.pattern_chords_) {
-      for (float f : chord) {
-        // Skip if this frequency already has guards (dedup across chords)
-        bool seen = false;
-        for (const auto &other_chord : det.pattern_chords_) {
-          for (float existing : other_chord) {
-            if (existing == f) {
-              seen = true;
-              break;
-            }
-            if (seen)
-              break;
-          }
-          if (seen)
-            break;
-        }
-        if (seen)
-          continue;
-
-        const float lo = f - det.guard_offset_hz_;
-        const float hi = f + det.guard_offset_hz_;
-        if (lo > 20.0f)
-          det.guard_freqs_.push_back(lo);
-        if (hi < 20000.0f)
-          det.guard_freqs_.push_back(hi);
-      }
-    }
-  }
-
   // ── Build the global frequency union ──
   this->build_frequency_map_();
 
@@ -131,11 +94,13 @@ void ToneSequenceComponent::setup() {
   float *v1 = static_cast<float *>(malloc(nf * sizeof(float)));
   float *v2 = static_cast<float *>(malloc(nf * sizeof(float)));
   float *c2 = static_cast<float *>(malloc(nf * sizeof(float)));
-  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr) {
+  float *spec = static_cast<float *>(malloc(nf * sizeof(float)));
+  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr || spec == nullptr) {
     free(accum);
     free(v1);
     free(v2);
     free(c2);
+    free(spec);
     free(window);
     this->window_ = nullptr;
     ESP_LOGE(TAG, "Failed to allocate Goertzel buffers");
@@ -146,6 +111,7 @@ void ToneSequenceComponent::setup() {
   this->g_v1_ = v1;
   this->g_v2_ = v2;
   this->g_c2_ = c2;
+  this->spectrum_db_ = spec;
   memset(accum, 0, nf * sizeof(float));
 
   this->sample_rate_hz_ = 0.0f;
@@ -161,7 +127,7 @@ void ToneSequenceComponent::setup() {
 // ──────────────────────────────────────────────
 
 void ToneSequenceComponent::build_frequency_map_() {
-  // Collect all unique frequencies (all chord tones + guards) across all detectors.
+  // Collect all unique chord frequencies across all detectors.
   std::vector<float> all_freqs;
 
   auto add_unique = [&all_freqs](float f) {
@@ -177,14 +143,12 @@ void ToneSequenceComponent::build_frequency_map_() {
       for (auto f : chord)
         add_unique(f);
     }
-    for (auto f : det.guard_freqs_)
-      add_unique(f);
   }
 
   this->global_freqs_ = all_freqs;
   this->total_filters_ = all_freqs.size();
 
-  // For each detector, map its chord frequencies and guards to global indices.
+  // For each detector, map its chord frequencies to global indices.
   auto find_global_idx = [&all_freqs](float f) -> uint32_t {
     for (uint32_t i = 0; i < all_freqs.size(); ++i) {
       if (std::fabs(all_freqs[i] - f) < 0.5f)
@@ -195,20 +159,12 @@ void ToneSequenceComponent::build_frequency_map_() {
 
   for (auto &det : this->detectors_) {
     det.chord_filter_indices_.clear();
-    det.guard_filter_indices_.clear();
-
-    // Per-chord mapping
     for (const auto &chord : det.pattern_chords_) {
       std::vector<uint32_t> indices;
       for (auto f : chord) {
         indices.push_back(find_global_idx(f));
       }
       det.chord_filter_indices_.push_back(indices);
-    }
-
-    // Guards
-    for (auto f : det.guard_freqs_) {
-      det.guard_filter_indices_.push_back(find_global_idx(f));
     }
   }
 }
@@ -373,47 +329,20 @@ void ToneSequenceComponent::emit_tick_() {
   const uint32_t n = this->window_size_;
   const float ref = static_cast<float>(n);
 
-  // Average over frames in this tick
+  // Average over frames in this tick, then convert to dBFS
   if (this->frame_count_ > 0) {
     const float inv = 1.0f / static_cast<float>(this->frame_count_);
     for (uint32_t t = 0; t < this->total_filters_; ++t) {
       this->accum_[t] *= inv;
+      const float p = this->accum_[t];
+      this->spectrum_db_[t] = (p > 0.0f) ? 10.0f * log10f(p / ref) : -300.0f;
     }
-  }
-
-  // Convert to dBFS spectrum (shared, read-only for detectors)
-  float *spectrum_db = static_cast<float *>(malloc(this->total_filters_ * sizeof(float)));
-  if (spectrum_db == nullptr) {
-    memset(this->accum_, 0, this->total_filters_ * sizeof(float));
-    this->frame_count_ = 0;
-    this->tick_sample_count_ = 0;
-    return;
-  }
-
-  for (uint32_t t = 0; t < this->total_filters_; ++t) {
-    const float p = this->accum_[t];
-    spectrum_db[t] = (p > 0.0f) ? 10.0f * log10f(p / ref) : -300.0f;
   }
 
   // Evaluate each detector against the shared spectrum
   for (auto &det : this->detectors_) {
-    // Compute guard-band average for THIS detector
-    float guard_sum = 0.0f;
-    uint32_t guard_count = 0;
-    for (auto gi : det.guard_filter_indices_) {
-      const float db = spectrum_db[gi];
-      if (db > -300.0f) {
-        guard_sum += db;
-        guard_count++;
-      }
-    }
-    const float guard_avg_db = (guard_count > 0) ? guard_sum / static_cast<float>(guard_count) : -300.0f;
-
-    // Feed the per-detector state machine (it inspects the spectrum directly)
-    det.evaluate_pattern_(spectrum_db, this->total_filters_, guard_avg_db);
+    det.evaluate_pattern_(this->spectrum_db_);
   }
-
-  free(spectrum_db);
 
   // Reset for next tick
   memset(this->accum_, 0, this->total_filters_ * sizeof(float));
@@ -422,29 +351,21 @@ void ToneSequenceComponent::emit_tick_() {
 }
 
 // ──────────────────────────────────────────────
-//  Per-detector chord detection helpers
+//  Per-detector chord detection
 // ──────────────────────────────────────────────
 
-bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &peak_db, float guard_avg_db) const {
+bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const {
   const auto &indices = this->chord_filter_indices_[step];
-  const auto &chord = this->pattern_chords_[step];
   peak_db = -300.0f;
 
-  // Every frequency in the chord must be above threshold AND within tolerance
-  // of the nominal frequency (the Goertzel bin is exact, but we still guard
-  // against a filter landing in a noisy region).
+  // Every frequency in the chord must be above threshold.
   for (size_t i = 0; i < indices.size(); ++i) {
     const float db = spectrum_db[indices[i]];
     if (db < this->threshold_db_) {
-      return false;  // one component missing → chord not present
+      return false;
     }
     if (db > peak_db)
       peak_db = db;
-  }
-
-  // Dominance: the chord peak must be at least dominance_db_ above guard average
-  if ((peak_db - guard_avg_db) < this->dominance_db_) {
-    return false;
   }
 
   return true;
@@ -467,13 +388,13 @@ void Detector::log_chord_(uint8_t step) const {
 //  Per-detector pattern state machine
 // ──────────────────────────────────────────────
 
-void Detector::evaluate_pattern_(const float *spectrum_db, uint32_t num_global_filters, float guard_avg_db) {
+void Detector::evaluate_pattern_(const float *spectrum_db) {
   const uint32_t num_steps = static_cast<uint32_t>(this->pattern_chords_.size());
 
   // IDLE – waiting for first chord
   if (!this->pattern_active_) {
     float peak = -300.0f;
-    if (this->chord_present_(spectrum_db, 0, peak, guard_avg_db)) {
+    if (this->chord_present_(spectrum_db, 0, peak)) {
       this->pattern_active_ = true;
       this->match_index_ = 1;
       this->pattern_start_ms_ = millis();
@@ -488,7 +409,7 @@ void Detector::evaluate_pattern_(const float *spectrum_db, uint32_t num_global_f
   if (this->need_falling_edge_) {
     const uint8_t prev_idx = static_cast<uint8_t>(this->match_index_ - 1);
     float prev_peak = -300.0f;
-    const bool prev_still_present = this->chord_present_(spectrum_db, prev_idx, prev_peak, guard_avg_db);
+    const bool prev_still_present = this->chord_present_(spectrum_db, prev_idx, prev_peak);
 
     if (prev_still_present) {
       return;  // previous chord still sounding – wait
@@ -500,9 +421,6 @@ void Detector::evaluate_pattern_(const float *spectrum_db, uint32_t num_global_f
 
   // MATCHING – look for the next chord
   if (this->match_index_ >= num_steps) {
-    // All chords matched – handled in the matching block below (span check).
-    // This line is unreachable in normal flow because we check after increment,
-    // but kept for safety.
     const uint32_t elapsed = millis() - this->pattern_start_ms_;
     if (elapsed >= this->min_duration_ms_) {
       this->latch_detection_(elapsed);
@@ -515,7 +433,7 @@ void Detector::evaluate_pattern_(const float *spectrum_db, uint32_t num_global_f
   }
 
   float peak = -300.0f;
-  if (this->chord_present_(spectrum_db, this->match_index_, peak, guard_avg_db)) {
+  if (this->chord_present_(spectrum_db, this->match_index_, peak)) {
     ESP_LOGD(TAG, "Det chord %lu/%lu matched, peak %.1f dB", (unsigned long) (this->match_index_ + 1),
              (unsigned long) num_steps, peak);
     this->log_chord_(this->match_index_);
@@ -523,19 +441,16 @@ void Detector::evaluate_pattern_(const float *spectrum_db, uint32_t num_global_f
     this->need_falling_edge_ = true;
 
     if (this->match_index_ >= num_steps) {
-      // Full sequence matched – check the time span
       const uint32_t elapsed = millis() - this->pattern_start_ms_;
       if (elapsed >= this->min_duration_ms_) {
         this->latch_detection_(elapsed);
       } else {
-        // Completed faster than min → too fast, discount
         ESP_LOGD(TAG, "Det pattern discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
                  (unsigned long) elapsed, (unsigned long) this->min_duration_ms_);
         this->reset_pattern_();
       }
     }
   }
-  // If chord not present, just wait (deadline enforced in loop())
 }
 
 void Detector::latch_detection_(uint32_t elapsed_ms) {

@@ -23,20 +23,14 @@ struct Detector {
   std::vector<std::vector<float>> pattern_chords_;
   uint32_t min_duration_ms_{1500};
   uint32_t max_duration_ms_{3000};
-  float tolerance_hz_{50.0f};
   float threshold_db_{-50.0f};
-  uint32_t release_time_ms_{3000};
-  float dominance_db_{6.0f};
-  uint16_t guard_offset_hz_{150};
+  /// Derived automatically: max_duration_ms_ + 2000.
+  uint32_t release_time_ms_{5000};
   binary_sensor::BinarySensor *detected_sensor_{nullptr};
 
   // ── Frequency mapping (populated during setup) ──
   /// chord_filter_indices_[step] = list of global Goertzel indices for each freq in that chord
   std::vector<std::vector<uint32_t>> chord_filter_indices_;
-  /// Global indices of guard-band filters for this detector
-  std::vector<uint32_t> guard_filter_indices_;
-  /// Guard frequencies used to build the global set
-  std::vector<float> guard_freqs_;
 
   // ── Pattern state machine ──
   bool pattern_active_{false};
@@ -49,23 +43,22 @@ struct Detector {
   // ── Methods ──
   void set_pattern(const std::vector<std::vector<float>> &chords) { this->pattern_chords_ = chords; }
   void set_min_duration_ms(uint32_t ms) { this->min_duration_ms_ = ms; }
-  void set_max_duration_ms(uint32_t ms) { this->max_duration_ms_ = ms; }
-  void set_tolerance_hz(float hz) { this->tolerance_hz_ = hz; }
+  void set_max_duration_ms(uint32_t ms) {
+    this->max_duration_ms_ = ms;
+    this->release_time_ms_ = ms + 2000;
+  }
   void set_threshold_db(float db) { this->threshold_db_ = db; }
-  void set_release_time(uint32_t ms) { this->release_time_ms_ = ms; }
-  void set_dominance_db(float db) { this->dominance_db_ = db; }
-  void set_guard_offset_hz(uint16_t hz) { this->guard_offset_hz_ = hz; }
   void set_detected_sensor(binary_sensor::BinarySensor *s) { this->detected_sensor_ = s; }
 
-  /// Returns true if every frequency in chord[step] is above threshold AND the
-  /// chord peak dominates the guard average. Sets peak_db to the strongest freq.
-  bool chord_present_(const float *spectrum_db, uint8_t step, float &peak_db, float guard_avg_db) const;
+  /// Returns true if every frequency in chord[step] is above threshold.
+  /// Sets peak_db to the strongest component.
+  bool chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const;
 
   /// Log a human-readable description of a chord (e.g. "[440.0, 6000.0] Hz").
   void log_chord_(uint8_t step) const;
 
   // State-machine methods
-  void evaluate_pattern_(const float *spectrum_db, uint32_t num_global_filters, float guard_avg_db);
+  void evaluate_pattern_(const float *spectrum_db);
   void latch_detection_(uint32_t elapsed_ms);
   void reset_pattern_();
   void reset_all_() {
@@ -114,7 +107,7 @@ class ToneSequenceComponent : public Component {
   /// Averages accum[] into dBFS spectrum, then evaluates every detector.
   void emit_tick_();
 
-  /// Build the union of all frequencies and map each detector's chords/guards
+  /// Build the union of all frequencies and map each detector's chords
   /// to indices in the global filter array.
   void build_frequency_map_();
 
@@ -132,14 +125,15 @@ class ToneSequenceComponent : public Component {
   int16_t *frame_buf_{nullptr};
   uint32_t frame_buf_offset_{0};
 
-  // ── Goertzel DSP state (shared, sized for UNION of all frequencies) ──
+  // ── Goertzel DSP state (shared, sized for the union of all frequencies) ──
   float *window_{nullptr};
   float *accum_{nullptr};
   float *g_v1_{nullptr};
   float *g_v2_{nullptr};
   float *g_c2_{nullptr};
+  float *spectrum_db_{nullptr};
 
-  // Global frequency list (all unique tones + guards across all detectors)
+  // Global frequency list (all unique tones across all detectors)
   std::vector<float> global_freqs_;
   uint32_t total_filters_{0};
 
@@ -149,9 +143,6 @@ class ToneSequenceComponent : public Component {
   // ── Tick assembly ──
   uint32_t frame_count_{0};
   uint32_t tick_sample_count_{0};
-
-  // ── Diagnostics ──
-  uint32_t diag_log_ms_{0};
 };
 
 // ── Automation actions ──
