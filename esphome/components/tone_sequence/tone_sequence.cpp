@@ -29,7 +29,7 @@ void ToneSequenceComponent::dump_config() {
                 "  Window Size: %" PRIu16 " samples\n"
                 "  Tick Interval: %" PRIu32 " ms\n"
                 "  Detectors: %lu\n"
-                "  Total Goertzel filters: %lu",
+                "  Total Goertzel filters: %lu (3 bins per target frequency, Δ = max(5 Hz, 1%% of f))",
                 this->window_size_, this->tick_interval_ms_, (unsigned long) this->detectors_.size(),
                 (unsigned long) this->total_filters_);
 
@@ -74,7 +74,7 @@ void ToneSequenceComponent::setup() {
   // ── Build the global frequency union ──
   this->build_frequency_map_();
 
-  ESP_LOGI(TAG, "Global Goertzel filters: %lu", (unsigned long) this->total_filters_);
+  ESP_LOGI(TAG, "Global Goertzel filters: %lu (3 bins per target frequency)", (unsigned long) this->total_filters_);
 
   // ── Hann window (N floats) ──
   const uint32_t n = this->window_size_;
@@ -127,7 +127,10 @@ void ToneSequenceComponent::setup() {
 // ──────────────────────────────────────────────
 
 void ToneSequenceComponent::build_frequency_map_() {
-  // Collect all unique chord frequencies across all detectors.
+  // Collect all unique chord frequencies across all detectors, expanding each
+  // nominal into a ±Δ triplet: Δ = max(5 Hz, 1% of f). The triplet (f-Δ, f, f+Δ)
+  // is deduplicated against the expanded list with the same 0.5 Hz epsilon, so
+  // expanded frequencies from different nominals that coincide share one filter.
   std::vector<float> all_freqs;
 
   auto add_unique = [&all_freqs](float f) {
@@ -138,17 +141,24 @@ void ToneSequenceComponent::build_frequency_map_() {
     all_freqs.push_back(f);
   };
 
+  auto add_triplet = [&add_unique](float f) {
+    const float delta = std::max(5.0f, 0.01f * f);
+    add_unique(f - delta);
+    add_unique(f);
+    add_unique(f + delta);
+  };
+
   for (auto &det : this->detectors_) {
     for (const auto &chord : det.pattern_chords_) {
       for (auto f : chord)
-        add_unique(f);
+        add_triplet(f);
     }
   }
 
   this->global_freqs_ = all_freqs;
   this->total_filters_ = all_freqs.size();
 
-  // For each detector, map its chord frequencies to global indices.
+  // For each detector, map its chord frequencies to triplets of global indices.
   auto find_global_idx = [&all_freqs](float f) -> uint32_t {
     for (uint32_t i = 0; i < all_freqs.size(); ++i) {
       if (std::fabs(all_freqs[i] - f) < 0.5f)
@@ -160,9 +170,10 @@ void ToneSequenceComponent::build_frequency_map_() {
   for (auto &det : this->detectors_) {
     det.chord_filter_indices_.clear();
     for (const auto &chord : det.pattern_chords_) {
-      std::vector<uint32_t> indices;
+      std::vector<std::array<uint32_t, 3>> indices;
       for (auto f : chord) {
-        indices.push_back(find_global_idx(f));
+        const float delta = std::max(5.0f, 0.01f * f);
+        indices.push_back({find_global_idx(f - delta), find_global_idx(f), find_global_idx(f + delta)});
       }
       det.chord_filter_indices_.push_back(indices);
     }
@@ -358,9 +369,11 @@ bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &pea
   const auto &indices = this->chord_filter_indices_[step];
   peak_db = -300.0f;
 
-  // Every frequency in the chord must be above threshold.
+  // Every frequency in the chord must be above threshold. Each target frequency
+  // spans three bins (f-Δ, f, f+Δ); the level is the max over its triplet.
   for (size_t i = 0; i < indices.size(); ++i) {
-    const float db = spectrum_db[indices[i]];
+    const auto &triplet = indices[i];
+    const float db = std::max({spectrum_db[triplet[0]], spectrum_db[triplet[1]], spectrum_db[triplet[2]]});
     if (db < this->threshold_db_) {
       return false;
     }

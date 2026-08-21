@@ -2,6 +2,7 @@
 
 #ifdef USE_ESP32
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -29,8 +30,8 @@ struct Detector {
   binary_sensor::BinarySensor *detected_sensor_{nullptr};
 
   // ── Frequency mapping (populated during setup) ──
-  /// chord_filter_indices_[step] = list of global Goertzel indices for each freq in that chord
-  std::vector<std::vector<uint32_t>> chord_filter_indices_;
+  /// chord_filter_indices_[step][i] = {f-Δ, f, f+Δ} global Goertzel indices for the i-th freq in that chord
+  std::vector<std::vector<std::array<uint32_t, 3>>> chord_filter_indices_;
 
   // ── Pattern state machine ──
   bool pattern_active_{false};
