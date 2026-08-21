@@ -25,6 +25,11 @@ CONF_MIN = "min"
 CONF_MAX = "max"
 CONF_DETECTED = "detected"
 CONF_DETECTORS = "detectors"
+CONF_MIN_TICKS = "min_ticks"
+CONF_NOISE_MARGIN = "noise_margin"
+CONF_HYSTERESIS = "hysteresis"
+CONF_MAX_NOTE_MS = "max_note_ms"
+CONF_FLOOR_DECAY_S = "floor_decay_s"
 
 tone_sequence_ns = cg.esphome_ns.namespace("tone_sequence")
 ToneSequenceComponent = tone_sequence_ns.class_("ToneSequenceComponent", cg.Component)
@@ -75,6 +80,16 @@ DETECTOR_SCHEMA = cv.Schema(
         cv.Optional(CONF_THRESHOLD, default=-50.0): cv.All(
             cv.float_, cv.Range(min=-80.0, max=0.0)
         ),
+        cv.Optional(CONF_MIN_TICKS, default=2): cv.All(cv.int_range(min=1, max=10)),
+        cv.Optional(CONF_NOISE_MARGIN, default=6.0): cv.All(
+            cv.float_, cv.Range(min=0.0, max=20.0)
+        ),
+        cv.Optional(CONF_HYSTERESIS, default=5.0): cv.All(
+            cv.float_, cv.Range(min=0.0, max=15.0)
+        ),
+        cv.Optional(CONF_MAX_NOTE_MS, default="1000ms"): cv.All(
+            cv.positive_time_period_milliseconds, cv.Range(min=100, max=5000)
+        ),
         cv.Required(CONF_DETECTED): binary_sensor.binary_sensor_schema(),
     }
 )
@@ -99,6 +114,9 @@ CONFIG_SCHEMA = cv.All(
                     max=cv.TimePeriod(seconds=5),
                 ),
             ),
+            cv.Optional(CONF_FLOOR_DECAY_S, default=30.0): cv.All(
+                cv.positive_float, cv.Range(min=1.0, max=300.0)
+            ),
             cv.Required(CONF_DETECTORS): cv.All(
                 cv.ensure_list(DETECTOR_SCHEMA),
                 cv.Length(min=1, max=8),
@@ -122,6 +140,7 @@ async def to_code(config):
     cg.add(var.set_microphone_source(mic_source))
     cg.add(var.set_window_size(config[CONF_WINDOW_SIZE]))
     cg.add(var.set_tick_interval(config[CONF_TICK_INTERVAL]))
+    cg.add(var.set_floor_decay_s(config[CONF_FLOOR_DECAY_S]))
 
     # Build each detector
     for _det_cfg in config[CONF_DETECTORS]:
@@ -141,6 +160,10 @@ async def to_code(config):
         cg.add(var.detector(i).set_min_duration_ms(det_cfg[CONF_DURATION][CONF_MIN]))
         cg.add(var.detector(i).set_max_duration_ms(det_cfg[CONF_DURATION][CONF_MAX]))
         cg.add(var.detector(i).set_threshold_db(det_cfg[CONF_THRESHOLD]))
+        cg.add(var.detector(i).set_min_consecutive_ticks(det_cfg[CONF_MIN_TICKS]))
+        cg.add(var.detector(i).set_noise_margin_db(det_cfg[CONF_NOISE_MARGIN]))
+        cg.add(var.detector(i).set_hysteresis_db(det_cfg[CONF_HYSTERESIS]))
+        cg.add(var.detector(i).set_max_note_duration_ms(det_cfg[CONF_MAX_NOTE_MS]))
 
         detected = await binary_sensor.new_binary_sensor(det_cfg[CONF_DETECTED])
         cg.add(var.detector(i).set_detected_sensor(detected))
