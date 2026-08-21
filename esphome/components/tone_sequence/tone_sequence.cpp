@@ -242,6 +242,12 @@ void ToneSequenceComponent::loop() {
     const uint32_t n = this->window_size_;
     const float nyquist = this->sample_rate_hz_ / 2.0f;
 
+    // DC-blocking high-pass coefficients (applied once per sample at buffer ingress)
+    const float rc_samples = this->sample_rate_hz_ / (2.0f * (float) M_PI * this->hpf_corner_hz_);
+    this->hpf_alpha_ = rc_samples / (rc_samples + 1.0f);
+    this->hpf_x_prev_ = 0.0f;
+    this->hpf_y_prev_ = 0.0f;
+
     for (uint32_t t = 0; t < this->total_filters_; ++t) {
       float freq = this->global_freqs_[t];
       if (freq < 20.0f)
@@ -258,13 +264,31 @@ void ToneSequenceComponent::loop() {
 
   const uint32_t samples_in_tick = stream_info.ms_to_samples(this->tick_interval_ms_);
 
-  // ── Stage samples and run Goertzel on each complete frame ──
+  // ── Stage samples into the circular buffer (1.5 N) and run Goertzel with a
+  //    N/2 hop (50 % overlap). The DC-blocker IIR runs once per sample at
+  //    ingress, so overlapped frames each see the correctly-filtered value. ──
+  const uint32_t n = this->window_size_;
+  const uint32_t buf_cap = (3u * n) / 2u;
+  const uint32_t hop = n / 2u;
+
   while (this->frame_count_ < MAX_FRAMES_PER_TICK && this->tick_sample_count_ < samples_in_tick) {
-    if (this->frame_buf_offset_ >= this->window_size_) {
-      this->process_frame_(this->frame_buf_);
-      this->frame_buf_offset_ = 0;
+    // Process every complete frame available in the circular buffer.
+    if (this->frame_samples_avail_ >= n) {
+      // Extract the N-sample span at frame_read_pos_ into the linear scratch
+      // (at most two memcpy when the span wraps the buffer end).
+      const uint32_t first = std::min(n, buf_cap - this->frame_read_pos_);
+      std::memcpy(this->frame_scratch_, this->frame_buf_ + this->frame_read_pos_, stream_info.samples_to_bytes(first));
+      if (first < n) {
+        std::memcpy(this->frame_scratch_ + first, this->frame_buf_, stream_info.samples_to_bytes(n - first));
+      }
+      this->process_frame_(this->frame_scratch_);
+      this->frame_read_pos_ += hop;
+      if (this->frame_read_pos_ >= buf_cap)
+        this->frame_read_pos_ -= buf_cap;
+      this->frame_samples_avail_ -= hop;
       this->frame_count_++;
-      this->tick_sample_count_ += this->window_size_;
+      // With a N/2 hop, each processed frame advances real audio time by N/2.
+      this->tick_sample_count_ += hop;
     }
 
     this->audio_source_->fill(0, false);
@@ -273,11 +297,22 @@ void ToneSequenceComponent::loop() {
       break;
 
     const int16_t *data = reinterpret_cast<const int16_t *>(this->audio_source_->mutable_data());
-    const uint32_t need = this->window_size_ - this->frame_buf_offset_;
-    const uint32_t take = std::min(available, need);
-    std::memcpy(this->frame_buf_ + this->frame_buf_offset_, data, stream_info.samples_to_bytes(take));
+    const uint32_t free_space = buf_cap - this->frame_samples_avail_;
+    const uint32_t take = std::min(available, free_space);
+    if (take > 0) {
+      // First-order DC-blocking high-pass: y[n] = a·(y[n-1] + x[n] − x[n-1])
+      for (uint32_t i = 0; i < take; ++i) {
+        const float x = static_cast<float>(data[i]);
+        float y = this->hpf_alpha_ * (this->hpf_y_prev_ + x - this->hpf_x_prev_);
+        this->hpf_x_prev_ = x;
+        this->hpf_y_prev_ = y;
+        const uint32_t idx = (this->frame_write_pos_ + i) % buf_cap;
+        this->frame_buf_[idx] = static_cast<int16_t>(y < -32768.0f ? -32768.0f : (y > 32767.0f ? 32767.0f : y));
+      }
+      this->frame_write_pos_ = (this->frame_write_pos_ + take) % buf_cap;
+      this->frame_samples_avail_ += take;
+    }
     this->audio_source_->consume(stream_info.samples_to_bytes(take));
-    this->frame_buf_offset_ += take;
   }
 
   // ── Emit when the tick window is full or frame cap is hit ──
@@ -599,7 +634,8 @@ bool ToneSequenceComponent::start_() {
   }
   this->ring_buffer_ = rb;
 
-  this->frame_buf_ = static_cast<int16_t *>(malloc((this->window_size_ + 1) * sizeof(int16_t)));
+  const uint32_t buf_cap = (3u * this->window_size_) / 2u;
+  this->frame_buf_ = static_cast<int16_t *>(malloc(buf_cap * sizeof(int16_t)));
   if (this->frame_buf_ == nullptr) {
     ESP_LOGE(TAG, "Failed to allocate frame buffer");
     this->audio_source_.reset();
@@ -607,6 +643,19 @@ bool ToneSequenceComponent::start_() {
     this->status_momentary_error("frame_buf", 15000);
     return false;
   }
+  this->frame_scratch_ = static_cast<int16_t *>(malloc(this->window_size_ * sizeof(int16_t)));
+  if (this->frame_scratch_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate frame scratch buffer");
+    free(this->frame_buf_);
+    this->frame_buf_ = nullptr;
+    this->audio_source_.reset();
+    this->ring_buffer_.reset();
+    this->status_momentary_error("frame_scratch", 15000);
+    return false;
+  }
+  this->frame_write_pos_ = 0;
+  this->frame_read_pos_ = 0;
+  this->frame_samples_avail_ = 0;
 
   this->status_clear_error();
   return true;
@@ -618,7 +667,15 @@ void ToneSequenceComponent::stop_() {
     free(this->frame_buf_);
     this->frame_buf_ = nullptr;
   }
-  this->frame_buf_offset_ = 0;
+  if (this->frame_scratch_ != nullptr) {
+    free(this->frame_scratch_);
+    this->frame_scratch_ = nullptr;
+  }
+  this->frame_write_pos_ = 0;
+  this->frame_read_pos_ = 0;
+  this->frame_samples_avail_ = 0;
+  this->hpf_x_prev_ = 0.0f;
+  this->hpf_y_prev_ = 0.0f;
 }
 
 }  // namespace esphome::tone_sequence
