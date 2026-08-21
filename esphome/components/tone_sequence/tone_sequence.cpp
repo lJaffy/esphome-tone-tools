@@ -39,6 +39,10 @@ void ToneSequenceComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", det.min_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", det.max_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB", det.threshold_db_);
+    ESP_LOGCONFIG(TAG, "      Min Consecutive Ticks: %u", (unsigned) det.min_consecutive_ticks_);
+    ESP_LOGCONFIG(TAG, "      Noise Margin: %.1f dB (above adaptive floor)", det.noise_margin_db_);
+    ESP_LOGCONFIG(TAG, "      Hysteresis: %.1f dB", det.hysteresis_db_);
+    ESP_LOGCONFIG(TAG, "      Max Note Duration: %" PRIu32 " ms", det.max_note_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", det.release_time_ms_);
     ESP_LOGCONFIG(TAG, "      Chords (%lu steps):", (unsigned long) det.pattern_chords_.size());
     for (size_t s = 0; s < det.pattern_chords_.size(); ++s) {
@@ -95,12 +99,14 @@ void ToneSequenceComponent::setup() {
   float *v2 = static_cast<float *>(malloc(nf * sizeof(float)));
   float *c2 = static_cast<float *>(malloc(nf * sizeof(float)));
   float *spec = static_cast<float *>(malloc(nf * sizeof(float)));
-  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr || spec == nullptr) {
+  float *floor = static_cast<float *>(malloc(nf * sizeof(float)));
+  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr || spec == nullptr || floor == nullptr) {
     free(accum);
     free(v1);
     free(v2);
     free(c2);
     free(spec);
+    free(floor);
     free(window);
     this->window_ = nullptr;
     ESP_LOGE(TAG, "Failed to allocate Goertzel buffers");
@@ -112,7 +118,11 @@ void ToneSequenceComponent::setup() {
   this->g_v2_ = v2;
   this->g_c2_ = c2;
   this->spectrum_db_ = spec;
+  this->noise_floor_ = floor;
   memset(accum, 0, nf * sizeof(float));
+  // Floor starts very low so it never masks the hard threshold at boot.
+  for (uint32_t i = 0; i < nf; ++i)
+    floor[i] = -80.0f;
 
   this->sample_rate_hz_ = 0.0f;
   this->dsp_ready_ = true;
@@ -350,9 +360,17 @@ void ToneSequenceComponent::emit_tick_() {
     }
   }
 
-  // Evaluate each detector against the shared spectrum
+  // Update the adaptive ambient floor per bin: drops instantly with the
+  // spectrum, rises at most decay_step_db (exponential, ~floor_decay_s time constant).
+  const float tick_period_s = static_cast<float>(this->tick_interval_ms_) / 1000.0f;
+  const float decay_step_db = 10.0f * log10f(1.0f + tick_period_s / this->floor_decay_s_);
+  for (uint32_t t = 0; t < this->total_filters_; ++t) {
+    this->noise_floor_[t] = std::min(this->spectrum_db_[t], this->noise_floor_[t] + decay_step_db);
+  }
+
+  // Evaluate each detector against the shared spectrum (floor-aware hysteresis)
   for (auto &det : this->detectors_) {
-    det.evaluate_pattern_(this->spectrum_db_);
+    det.evaluate_pattern_(this->spectrum_db_, this->noise_floor_);
   }
 
   // Reset for next tick
@@ -365,23 +383,62 @@ void ToneSequenceComponent::emit_tick_() {
 //  Per-detector chord detection
 // ──────────────────────────────────────────────
 
-bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const {
+bool Detector::chord_present_(const float *spectrum_db, const float *noise_floor_db, uint8_t step, float &peak_db) {
   const auto &indices = this->chord_filter_indices_[step];
   peak_db = -300.0f;
 
-  // Every frequency in the chord must be above threshold. Each target frequency
-  // spans three bins (f-Δ, f, f+Δ); the level is the max over its triplet.
-  for (size_t i = 0; i < indices.size(); ++i) {
+  // Per-frequency levels: max over the three Goertzel bins (f-Δ, f, f+Δ).
+  const uint8_t nfreq = static_cast<uint8_t>(indices.size());
+  float levels[8];   // chord length is schema-bounded to 8
+  float on_th[8];    // effective on-threshold per frequency
+
+  for (uint8_t i = 0; i < nfreq; ++i) {
     const auto &triplet = indices[i];
-    const float db = std::max({spectrum_db[triplet[0]], spectrum_db[triplet[1]], spectrum_db[triplet[2]]});
-    if (db < this->threshold_db_) {
-      return false;
-    }
-    if (db > peak_db)
-      peak_db = db;
+    levels[i] = std::max({spectrum_db[triplet[0]], spectrum_db[triplet[1]], spectrum_db[triplet[2]]});
+    if (levels[i] > peak_db)
+      peak_db = levels[i];
+
+    // Effective on-threshold: the user's absolute threshold is a hard lower
+    // bound; above that, the tone must clear the adaptive floor by margin.
+    const float best_floor = std::max({noise_floor_db[triplet[0]], noise_floor_db[triplet[1]],
+                                       noise_floor_db[triplet[2]]});
+    on_th[i] = std::max(this->threshold_db_, best_floor + this->noise_margin_db_);
   }
 
-  return true;
+  const bool was_active = this->chord_active_[step];
+  bool result;
+  if (was_active) {
+    // Staying on: every frequency must remain above its off-threshold.
+    result = true;
+    for (uint8_t i = 0; i < nfreq; ++i) {
+      if (levels[i] < on_th[i] - this->hysteresis_db_) {
+        result = false;
+        break;
+      }
+    }
+  } else {
+    // Turning on: every frequency must cross its on-threshold.
+    result = true;
+    for (uint8_t i = 0; i < nfreq; ++i) {
+      if (levels[i] < on_th[i]) {
+        result = false;
+        break;
+      }
+    }
+  }
+
+  this->chord_active_[step] = result;
+  return result;
+}
+
+bool Detector::confirm_step_(const float *spectrum_db, const float *noise_floor_db, uint8_t step, float &peak_db) {
+  if (this->chord_present_(spectrum_db, noise_floor_db, step, peak_db)) {
+    this->chord_tick_count_[step] = (this->chord_tick_count_[step] < 250u) ? this->chord_tick_count_[step] + 1 : 250;
+    return this->chord_tick_count_[step] >= this->min_consecutive_ticks_;
+  }
+  this->chord_tick_count_[step] = 0;
+  peak_db = -300.0f;
+  return false;
 }
 
 void Detector::log_chord_(uint8_t step) const {
@@ -401,13 +458,14 @@ void Detector::log_chord_(uint8_t step) const {
 //  Per-detector pattern state machine
 // ──────────────────────────────────────────────
 
-void Detector::evaluate_pattern_(const float *spectrum_db) {
+void Detector::evaluate_pattern_(const float *spectrum_db, const float *noise_floor_db) {
   const uint32_t num_steps = static_cast<uint32_t>(this->pattern_chords_.size());
 
-  // IDLE – waiting for first chord
+  // IDLE – waiting for first chord (confirmed over min_consecutive_ticks_ ticks)
   if (!this->pattern_active_) {
     float peak = -300.0f;
-    if (this->chord_present_(spectrum_db, 0, peak)) {
+    if (this->confirm_step_(spectrum_db, noise_floor_db, 0, peak)) {
+      this->chord_tick_count_[0] = 0;
       this->pattern_active_ = true;
       this->match_index_ = 1;
       this->pattern_start_ms_ = millis();
@@ -422,7 +480,7 @@ void Detector::evaluate_pattern_(const float *spectrum_db) {
   if (this->need_falling_edge_) {
     const uint8_t prev_idx = static_cast<uint8_t>(this->match_index_ - 1);
     float prev_peak = -300.0f;
-    const bool prev_still_present = this->chord_present_(spectrum_db, prev_idx, prev_peak);
+    const bool prev_still_present = this->chord_present_(spectrum_db, noise_floor_db, prev_idx, prev_peak);
 
     if (prev_still_present) {
       return;  // previous chord still sounding – wait
@@ -446,7 +504,8 @@ void Detector::evaluate_pattern_(const float *spectrum_db) {
   }
 
   float peak = -300.0f;
-  if (this->chord_present_(spectrum_db, this->match_index_, peak)) {
+  if (this->confirm_step_(spectrum_db, noise_floor_db, this->match_index_, peak)) {
+    this->chord_tick_count_[this->match_index_] = 0;
     ESP_LOGD(TAG, "Det chord %lu/%lu matched, peak %.1f dB", (unsigned long) (this->match_index_ + 1),
              (unsigned long) num_steps, peak);
     this->log_chord_(this->match_index_);
@@ -480,12 +539,16 @@ void Detector::latch_detection_(uint32_t elapsed_ms) {
   this->pattern_active_ = false;
   this->match_index_ = 0;
   this->need_falling_edge_ = false;
+  std::fill(this->chord_tick_count_.begin(), this->chord_tick_count_.end(), 0);
+  std::fill(this->chord_active_.begin(), this->chord_active_.end(), false);
 }
 
 void Detector::reset_pattern_() {
   this->pattern_active_ = false;
   this->match_index_ = 0;
   this->need_falling_edge_ = false;
+  std::fill(this->chord_tick_count_.begin(), this->chord_tick_count_.end(), 0);
+  std::fill(this->chord_active_.begin(), this->chord_active_.end(), false);
 }
 
 // ──────────────────────────────────────────────
