@@ -25,6 +25,7 @@ CONF_MIN = "min"
 CONF_MAX = "max"
 CONF_DETECTED = "detected"
 CONF_DETECTORS = "detectors"
+CONF_HP_CORNER_HZ = "hp_corner_hz"
 CONF_MIN_TICKS = "min_ticks"
 CONF_NOISE_MARGIN = "noise_margin"
 CONF_HYSTERESIS = "hysteresis"
@@ -107,6 +108,9 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Required(CONF_PASSIVE): cv.boolean,
             cv.Optional(CONF_WINDOW_SIZE, default=1024): cv.int_range(min=64, max=4096),
+            cv.Optional(CONF_HP_CORNER_HZ, default=50.0): cv.All(
+                cv.positive_float, cv.Range(min=5.0, max=200.0)
+            ),
             cv.Optional(CONF_TICK_INTERVAL, default="100ms"): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(
@@ -140,6 +144,7 @@ async def to_code(config):
     cg.add(var.set_microphone_source(mic_source))
     cg.add(var.set_window_size(config[CONF_WINDOW_SIZE]))
     cg.add(var.set_tick_interval(config[CONF_TICK_INTERVAL]))
+    cg.add(var.set_hpf_corner_hz(config[CONF_HP_CORNER_HZ]))
     cg.add(var.set_floor_decay_s(config[CONF_FLOOR_DECAY_S]))
 
     # Build each detector
