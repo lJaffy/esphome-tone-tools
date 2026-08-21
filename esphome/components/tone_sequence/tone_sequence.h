@@ -25,6 +25,9 @@ struct Detector {
   uint32_t min_duration_ms_{1500};
   uint32_t max_duration_ms_{3000};
   float threshold_db_{-50.0f};
+  /// A chord only counts as present for state-machine purposes after this many
+  /// consecutive ticks above threshold (a single-frame transient is ignored).
+  uint8_t min_consecutive_ticks_{2};
   /// Margin above the adaptive noise floor a tone must exceed to turn on.
   float noise_margin_db_{6.0f};
   /// Schmitt-trigger width: once on, a chord stays present until its level drops
@@ -33,8 +36,6 @@ struct Detector {
   /// A note present longer than this at one step is "stuck" and ignored for
   /// advance purposes until the chord falls below its off-threshold.
   uint32_t max_note_duration_ms_{1000};
-  /// A chord only counts as present after this many consecutive ticks above threshold.
-  uint8_t min_consecutive_ticks_{2};
   /// Derived automatically: max_duration_ms_ + 2000.
   uint32_t release_time_ms_{5000};
   binary_sensor::BinarySensor *detected_sensor_{nullptr};
@@ -43,11 +44,9 @@ struct Detector {
   /// chord_filter_indices_[step][i] = {f-Δ, f, f+Δ} global Goertzel indices for the i-th freq in that chord
   std::vector<std::vector<std::array<uint32_t, 3>>> chord_filter_indices_;
 
-  // ── Hysteresis state (sized to pattern_chords_ in set_pattern) ──
+  // ── Hysteresis + confirmation state (sized to pattern_chords_ in set_pattern) ──
   /// Per-step flag: is this step's chord currently in the hysteresis "on" state?
   std::vector<bool> chord_active_;
-
-  // ── Consecutive-tick confirmation (sized to pattern_chords_ in set_pattern) ──
   /// Per-step count of consecutive ticks the chord has been present.
   std::vector<uint8_t> chord_tick_count_;
 
@@ -71,10 +70,11 @@ struct Detector {
   // ── Methods ──
   void set_pattern(const std::vector<std::vector<float>> &chords) {
     this->pattern_chords_ = chords;
-    this->chord_active_.assign(this->pattern_chords_.size(), false);
-    this->chord_tick_count_.assign(this->pattern_chords_.size(), 0);
-    this->note_start_ms_.assign(this->pattern_chords_.size(), 0);
-    this->step_stuck_.assign(this->pattern_chords_.size(), 0);
+    const size_t nsteps = this->pattern_chords_.size();
+    this->chord_active_.assign(nsteps, false);
+    this->chord_tick_count_.assign(nsteps, 0);
+    this->note_start_ms_.assign(nsteps, 0);
+    this->step_stuck_.assign(nsteps, 0);
   }
   void set_min_duration_ms(uint32_t ms) { this->min_duration_ms_ = ms; }
   void set_max_duration_ms(uint32_t ms) {
