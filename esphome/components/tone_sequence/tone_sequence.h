@@ -168,8 +168,21 @@ class ToneSequenceComponent : public Component {
   // ── Audio pipeline (shared) ──
   std::unique_ptr<audio::RingBufferAudioSource> audio_source_;
   std::weak_ptr<ring_buffer::RingBuffer> ring_buffer_;
+  /// Circular staging buffer, 1.5 × window_size_ samples (N/2 hop overlap).
   int16_t *frame_buf_{nullptr};
-  uint32_t frame_buf_offset_{0};
+  uint32_t frame_write_pos_{0};
+  uint32_t frame_read_pos_{0};
+  uint32_t frame_samples_avail_{0};
+  /// Linear scratch for extracting an N-sample span that may wrap the circular buffer.
+  int16_t *frame_scratch_{nullptr};
+
+  // ── DC blocking (first-order high-pass, applied once per sample at ingress) ──
+  float hpf_x_prev_{0.0f};
+  float hpf_y_prev_{0.0f};
+  float hpf_alpha_{0.981f};
+  /// Corner frequency for the ingress HPF in Hz (set from YAML).
+  float hpf_corner_hz_{50.0f};
+  void set_hpf_corner_hz(float hz) { this->hpf_corner_hz_ = hz; }
 
   // ── Goertzel DSP state (shared, sized for the union of all frequencies) ──
   float *window_{nullptr};
