@@ -468,9 +468,27 @@ bool Detector::chord_present_(const float *spectrum_db, const float *noise_floor
 
 bool Detector::confirm_step_(const float *spectrum_db, const float *noise_floor_db, uint8_t step, float &peak_db) {
   if (this->chord_present_(spectrum_db, noise_floor_db, step, peak_db)) {
+    if (this->note_start_ms_[step] == 0) {
+      this->note_start_ms_[step] = millis();
+    }
     this->chord_tick_count_[step] = (this->chord_tick_count_[step] < 250u) ? this->chord_tick_count_[step] + 1 : 250;
-    return this->chord_tick_count_[step] >= this->min_consecutive_ticks_;
+
+    // Stuck-tone guard: a note confirmed but still present after
+    // max_note_duration_ms_ is not a chime note. Mark the step stuck until
+    // its falling edge — do not advance and do not reset the pattern.
+    if (!this->step_stuck_[step] && this->chord_tick_count_[step] >= this->min_consecutive_ticks_ &&
+        millis() - this->note_start_ms_[step] > this->max_note_duration_ms_) {
+      this->step_stuck_[step] = 1;
+      this->chord_tick_count_[step] = 0;
+      ESP_LOGD(TAG, "Det step %u stuck tone (>%" PRIu32 " ms) – ignored until falling edge", (unsigned) step,
+               (unsigned long) this->max_note_duration_ms_);
+    }
+    return !this->step_stuck_[step] && this->chord_tick_count_[step] >= this->min_consecutive_ticks_;
   }
+
+  // Falling edge for this step → re-arm.
+  this->note_start_ms_[step] = 0;
+  this->step_stuck_[step] = 0;
   this->chord_tick_count_[step] = 0;
   peak_db = -300.0f;
   return false;
@@ -498,6 +516,12 @@ void Detector::evaluate_pattern_(const float *spectrum_db, const float *noise_fl
 
   // IDLE – waiting for first chord (confirmed over min_consecutive_ticks_ ticks)
   if (!this->pattern_active_) {
+    // Refractory: ignore chord-1 matches briefly after a latch so the tail of
+    // the same chime event does not start a second pattern.
+    if (millis() < this->refractory_until_ms_) {
+      return;
+    }
+
     float peak = -300.0f;
     if (this->confirm_step_(spectrum_db, noise_floor_db, 0, peak)) {
       this->chord_tick_count_[0] = 0;
@@ -571,10 +595,18 @@ void Detector::latch_detection_(uint32_t elapsed_ms) {
     this->detected_sensor_->publish_state(true);
   }
 
+  // Refractory window: the tail of the chime that just completed must not
+  // immediately start a second pattern. One full note at the maximum allowed
+  // duration covers any realistic overlap without being so long it blocks a
+  // genuine quick re-trigger.
+  this->refractory_until_ms_ = millis() + this->max_note_duration_ms_;
+
   this->pattern_active_ = false;
   this->match_index_ = 0;
   this->need_falling_edge_ = false;
   std::fill(this->chord_tick_count_.begin(), this->chord_tick_count_.end(), 0);
+  std::fill(this->note_start_ms_.begin(), this->note_start_ms_.end(), 0u);
+  std::fill(this->step_stuck_.begin(), this->step_stuck_.end(), 0u);
   std::fill(this->chord_active_.begin(), this->chord_active_.end(), false);
 }
 
@@ -583,6 +615,8 @@ void Detector::reset_pattern_() {
   this->match_index_ = 0;
   this->need_falling_edge_ = false;
   std::fill(this->chord_tick_count_.begin(), this->chord_tick_count_.end(), 0);
+  std::fill(this->note_start_ms_.begin(), this->note_start_ms_.end(), 0u);
+  std::fill(this->step_stuck_.begin(), this->step_stuck_.end(), 0u);
   std::fill(this->chord_active_.begin(), this->chord_active_.end(), false);
 }
 
