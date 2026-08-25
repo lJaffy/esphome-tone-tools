@@ -27,6 +27,9 @@ CONF_MAX = "max"
 CONF_CHIMES = "chimes"
 CONF_CHORD = "chord"
 CONF_TAIL_GRACE = "tail_grace"
+CONF_SNR_MARGIN_DB = "snr_margin_db"
+CONF_NOISE_FLOOR_ALPHA_DOWN = "noise_floor_alpha_down"
+CONF_NOISE_FLOOR_ALPHA_UP = "noise_floor_alpha_up"
 
 chime_ns = cg.esphome_ns.namespace("chime")
 ChimeComponent = chime_ns.class_("ChimeComponent", cg.Component)
@@ -103,6 +106,9 @@ CHIME_SCHEMA = binary_sensor.binary_sensor_schema().extend(
         cv.Optional(CONF_THRESHOLD, default=-50.0): cv.All(
             cv.float_, cv.Range(min=-80.0, max=0.0)
         ),
+        cv.Optional(CONF_SNR_MARGIN_DB, default=8.0): cv.All(
+            cv.positive_float, cv.Range(min=0.0, max=60.0)
+        ),
         cv.Optional(
             CONF_TAIL_GRACE, default="2s"
         ): cv.positive_time_period_milliseconds,
@@ -129,6 +135,12 @@ CONFIG_SCHEMA = cv.All(
                     max=cv.TimePeriod(seconds=5),
                 ),
             ),
+            cv.Optional(CONF_NOISE_FLOOR_ALPHA_DOWN, default=0.05): cv.All(
+                cv.positive_float, cv.Range(min=0.0001, max=1.0)
+            ),
+            cv.Optional(CONF_NOISE_FLOOR_ALPHA_UP, default=0.005): cv.All(
+                cv.positive_float, cv.Range(min=0.0001, max=1.0)
+            ),
             cv.Required(CONF_CHIMES): cv.All(
                 cv.ensure_list(CHIME_SCHEMA),
                 cv.Length(min=1, max=8),
@@ -142,6 +154,11 @@ CONFIG_SCHEMA = cv.All(
 # ── Code generation ──
 
 
+def _float_expr(value) -> cg.RawExpression:
+    """Render a Python float as a C++ float literal (always with a decimal point)."""
+    return cg.RawExpression(f"{float(value):.6g}f")
+
+
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -152,6 +169,10 @@ async def to_code(config):
     cg.add(var.set_microphone_source(mic_source))
     cg.add(var.set_window_size(config[CONF_WINDOW_SIZE]))
     cg.add(var.set_tick_interval(config[CONF_TICK_INTERVAL]))
+    cg.add(
+        var.set_noise_floor_alpha_down(_float_expr(config[CONF_NOISE_FLOOR_ALPHA_DOWN]))
+    )
+    cg.add(var.set_noise_floor_alpha_up(_float_expr(config[CONF_NOISE_FLOOR_ALPHA_UP])))
 
     for _chime_cfg in config[CONF_CHIMES]:
         cg.add(var.add_chime())
@@ -178,7 +199,10 @@ async def to_code(config):
         cg.add(var.chime(i).set_pattern_times(cg.RawExpression(times_cstr)))
         cg.add(var.chime(i).set_min_duration_ms(chime_cfg[CONF_DURATION][CONF_MIN]))
         cg.add(var.chime(i).set_max_duration_ms(chime_cfg[CONF_DURATION][CONF_MAX]))
-        cg.add(var.chime(i).set_threshold_db(chime_cfg[CONF_THRESHOLD]))
+        cg.add(var.chime(i).set_threshold_db(_float_expr(chime_cfg[CONF_THRESHOLD])))
+        cg.add(
+            var.chime(i).set_snr_margin_db(_float_expr(chime_cfg[CONF_SNR_MARGIN_DB]))
+        )
         cg.add(var.chime(i).set_tail_grace_ms(chime_cfg[CONF_TAIL_GRACE]))
 
         detected = await binary_sensor.new_binary_sensor(chime_cfg)
