@@ -396,20 +396,38 @@ void Chime::evaluate_pattern_(const float *spectrum_db) {
     return;
   }
 
-  // ── WAITING FOR FALLING EDGE ──
-  if (this->need_falling_edge_) {
+// ── WAITING FOR FALLING EDGE ──
+if (this->need_falling_edge_) {
     const uint8_t prev_idx = static_cast<uint8_t>(this->match_index_ - 1);
-    float prev_peak = -300.0f;
-    const bool prev_still_present = this->chord_present_(spectrum_db, prev_idx, prev_peak);
+    const uint8_t next_idx = static_cast<uint8_t>(this->match_index_);
 
-    if (prev_still_present) {
-      return;
+    // If every frequency in the previous chord also appears in the next
+    // chord, there is no component that will actually fall – skip the wait.
+    const auto &prev_chord = this->pattern_chords_[prev_idx];
+    const auto &next_chord = this->pattern_chords_[next_idx];
+
+    bool prev_subset_of_next = true;
+    for (float f_prev : prev_chord) {
+        bool in_next = false;
+        for (float f_next : next_chord) {
+            if (std::fabs(f_prev - f_next) < 0.5f) { in_next = true; break; }
+        }
+        if (!in_next) { prev_subset_of_next = false; break; }
     }
 
-    this->need_falling_edge_ = false;
-    ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms", (unsigned) (prev_idx + 1),
-             (unsigned long) num_steps, (unsigned) elapsed);
-  }
+    if (prev_subset_of_next) {
+        // No unique component to fall; proceed immediately.
+        this->need_falling_edge_ = false;
+    } else {
+        float prev_peak = -300.0f;
+        if (this->chord_present_(spectrum_db, prev_idx, prev_peak)) {
+            return;  // still waiting
+        }
+        this->need_falling_edge_ = false;
+        ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms",
+                 (unsigned)(prev_idx + 1), (unsigned long) num_steps, (unsigned) elapsed);
+    }
+}
 
   // ── ALL STEPS MATCHED ──
   if (this->match_index_ >= num_steps) {
