@@ -1,4 +1,4 @@
-#include "sound_frequency.h"
+#include "tone_sequence.h"
 
 #ifdef USE_ESP32
 
@@ -8,47 +8,78 @@
 #include "esphome/core/log.h"
 
 #include <cmath>
-#include <cstdint>
 #include <cstring>
+#include <algorithm>
 
-// Throttle for the periodic loop diagnostics (see loop()). The one-shot events
-// (DSP init, band computation, first window emit) are not throttled.
-static const uint32_t DIAGNOSTIC_LOG_INTERVAL_MS = 5000;
+namespace esphome::tone_sequence {
 
-namespace esphome::sound_frequency {
-
-static const char *const TAG = "sound_frequency";
+static const char *const TAG = "tone_sequence";
 
 static const uint32_t MAX_FILL_DURATION_MS = 30;
 static const uint32_t RING_BUFFER_DURATION_MS = 120;
-/// Cap on the number of Goertzel frames averaged into one measurement window (bounds CPU at high sample rates)
-static const uint32_t MAX_FFT_FRAMES = 32;
+static const uint32_t MAX_FRAMES_PER_TICK = 16;
 
-void SoundFrequencyComponent::dump_config() {
+// ──────────────────────────────────────────────
+//  Configuration
+// ──────────────────────────────────────────────
+
+void ToneSequenceComponent::dump_config() {
   ESP_LOGCONFIG(TAG,
-                "Sound Frequency Component:\n"
-                "  Measurement Duration: %" PRIu32 " ms\n"
+                "Tone Sequence Detector:\n"
                 "  Window Size: %" PRIu16 " samples\n"
-                "  Min Frequency: %f Hz\n"
-                "  Max Frequency: %f Hz\n"
-                "  Peak Threshold: %f dB",
-                this->measurement_duration_ms_, this->window_size_, this->min_frequency_hz_, this->max_frequency_hz_,
-                this->peak_threshold_db_);
-  LOG_SENSOR("  ", "Frequency:", this->frequency_sensor_);
-  LOG_SENSOR("  ", "Peak Magnitude:", this->peak_magnitude_sensor_);
+                "  Tick Interval: %" PRIu32 " ms\n"
+                "  Detectors: %lu\n"
+                "  Total Goertzel filters: %lu",
+                this->window_size_, this->tick_interval_ms_, (unsigned long) this->detectors_.size(),
+                (unsigned long) this->total_filters_);
+
+  for (size_t d = 0; d < this->detectors_.size(); ++d) {
+    auto &det = this->detectors_[d];
+    ESP_LOGCONFIG(TAG, "    Detector[%lu]:", (unsigned long) d);
+    ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", det.min_duration_ms_);
+    ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", det.max_duration_ms_);
+    ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB", det.threshold_db_);
+    ESP_LOGCONFIG(TAG, "      Tail Grace: %" PRIu32 " ms", det.tail_grace_ms_);
+    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", det.release_time_ms_);
+    ESP_LOGCONFIG(TAG, "      Chords (%lu steps):", (unsigned long) det.pattern_chords_.size());
+    for (size_t s = 0; s < det.pattern_chords_.size(); ++s) {
+      const auto &chord = det.pattern_chords_[s];
+      const uint32_t t_ms = (s < det.pattern_times_ms_.size()) ? det.pattern_times_ms_[s] : 0;
+      ESP_LOGCONFIG(TAG, "        [%u] @ %lu ms:", (unsigned) s, (unsigned long) t_ms);
+      for (size_t f = 0; f < chord.size(); ++f) {
+        ESP_LOGCONFIG(TAG, "          %.1f Hz", chord[f]);
+      }
+    }
+    if (det.detected_sensor_ != nullptr) {
+      LOG_BINARY_SENSOR("      ", "Detected:", det.detected_sensor_);
+    }
+  }
 }
 
-void SoundFrequencyComponent::setup() {
+// ──────────────────────────────────────────────
+//  Setup – one-time allocation
+// ──────────────────────────────────────────────
+
+void ToneSequenceComponent::setup() {
   this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
-    auto temp_ring_buffer = this->ring_buffer_.lock();
-    if (temp_ring_buffer != nullptr) {
-      temp_ring_buffer->write((void *) data.data(), data.size());
+    auto rb = this->ring_buffer_.lock();
+    if (rb != nullptr) {
+      rb->write((void *) data.data(), data.size());
     }
   });
 
-  const uint32_t n = this->window_size_;
+  if (this->detectors_.empty()) {
+    ESP_LOGE(TAG, "No detectors configured – nothing to do");
+    return;
+  }
 
-  // Allocate and fill the Hann window. Computed directly – no esp_dsp needed.
+  // ── Build the global frequency union ──
+  this->build_frequency_map_();
+
+  ESP_LOGI(TAG, "Global Goertzel filters: %lu", (unsigned long) this->total_filters_);
+
+  // ── Hann window (N floats) ──
+  const uint32_t n = this->window_size_;
   float *window = static_cast<float *>(malloc(n * sizeof(float)));
   if (window == nullptr) {
     ESP_LOGE(TAG, "Failed to allocate window buffer (%" PRIu32 " bytes)", n * sizeof(float));
@@ -59,76 +90,124 @@ void SoundFrequencyComponent::setup() {
   }
   this->window_ = window;
 
-  // Allocate Goertzel buffers at worst-case size (N/2 bins). Only the first
-  // num_bins_ entries will actually be used once the band is known.
-  const uint32_t max_bins = n / 2;
-
-  float *accum = static_cast<float *>(malloc(max_bins * sizeof(float)));
-  float *v1 = static_cast<float *>(malloc(max_bins * sizeof(float)));
-  float *v2 = static_cast<float *>(malloc(max_bins * sizeof(float)));
-  float *c2 = static_cast<float *>(malloc(max_bins * sizeof(float)));
-  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr) {
+  // ── Goertzel buffers (one slot per global filter) ──
+  const uint32_t nf = this->total_filters_;
+  float *accum = static_cast<float *>(malloc(nf * sizeof(float)));
+  float *v1 = static_cast<float *>(malloc(nf * sizeof(float)));
+  float *v2 = static_cast<float *>(malloc(nf * sizeof(float)));
+  float *c2 = static_cast<float *>(malloc(nf * sizeof(float)));
+  float *spec = static_cast<float *>(malloc(nf * sizeof(float)));
+  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr || spec == nullptr) {
     free(accum);
     free(v1);
     free(v2);
     free(c2);
+    free(spec);
     free(window);
+    this->window_ = nullptr;
     ESP_LOGE(TAG, "Failed to allocate Goertzel buffers");
     return;
   }
 
   this->accum_ = accum;
-  this->goertzel_v1_ = v1;
-  this->goertzel_v2_ = v2;
-  this->goertzel_c2_ = c2;
-  this->num_bins_ = 0;
+  this->g_v1_ = v1;
+  this->g_v2_ = v2;
+  this->g_c2_ = c2;
+  this->spectrum_db_ = spec;
+  memset(accum, 0, nf * sizeof(float));
 
-  memset(this->accum_, 0, max_bins * sizeof(float));
-
-  this->dsp_initialized_ = true;
+  this->sample_rate_hz_ = 0.0f;
+  this->dsp_ready_ = true;
 
   if (!this->microphone_source_->is_passive()) {
-    // Automatically start the microphone if not in passive mode
     this->microphone_source_->start();
   }
 }
 
-void SoundFrequencyComponent::loop() {
-  if ((this->frequency_sensor_ == nullptr) && (this->peak_magnitude_sensor_ == nullptr)) {
+// ──────────────────────────────────────────────
+//  Build global frequency union & per-detector index mapping
+// ──────────────────────────────────────────────
+
+void ToneSequenceComponent::build_frequency_map_() {
+  // Collect all unique chord frequencies across all detectors.
+  std::vector<float> all_freqs;
+
+  auto add_unique = [&all_freqs](float f) {
+    for (auto &existing : all_freqs) {
+      if (std::fabs(existing - f) < 0.5f)
+        return;  // close enough
+    }
+    all_freqs.push_back(f);
+  };
+
+  for (auto &det : this->detectors_) {
+    for (const auto &chord : det.pattern_chords_) {
+      for (auto f : chord)
+        add_unique(f);
+    }
+  }
+
+  this->global_freqs_ = all_freqs;
+  this->total_filters_ = all_freqs.size();
+
+  // For each detector, map its chord frequencies to global indices.
+  auto find_global_idx = [&all_freqs](float f) -> uint32_t {
+    for (uint32_t i = 0; i < all_freqs.size(); ++i) {
+      if (std::fabs(all_freqs[i] - f) < 0.5f)
+        return i;
+    }
+    return 0;  // shouldn't happen
+  };
+
+  for (auto &det : this->detectors_) {
+    det.chord_filter_indices_.clear();
+    for (const auto &chord : det.pattern_chords_) {
+      std::vector<uint32_t> indices;
+      for (auto f : chord) {
+        indices.push_back(find_global_idx(f));
+      }
+      det.chord_filter_indices_.push_back(indices);
+    }
+  }
+}
+
+// ──────────────────────────────────────────────
+//  Main loop
+// ──────────────────────────────────────────────
+
+void ToneSequenceComponent::loop() {
+  if (!this->dsp_ready_ || this->window_ == nullptr || this->accum_ == nullptr || this->g_v1_ == nullptr ||
+      this->g_v2_ == nullptr || this->g_c2_ == nullptr) {
     return;
   }
 
-  if (!this->dsp_initialized_ || this->window_ == nullptr || this->accum_ == nullptr || this->goertzel_v1_ == nullptr ||
-      this->goertzel_v2_ == nullptr || this->goertzel_c2_ == nullptr) {
-    return;
+  // ── Check if any detector has a sensor (for mic-not-running warning) ──
+  bool any_sensor = false;
+  for (auto &det : this->detectors_) {
+    if (det.detected_sensor_ != nullptr) {
+      any_sensor = true;
+      break;
+    }
   }
 
   if (this->microphone_source_->is_running() && !this->status_has_error()) {
     if (this->start_()) {
       this->status_clear_warning();
     } else {
-      ESP_LOGW(TAG, "Internal buffers failed to allocate");
+      ESP_LOGW(TAG, "Buffer allocation failed");
       return;
     }
   } else {
     if (!this->status_has_warning()) {
-      this->status_set_warning(LOG_STR("Microphone is not running, can't compute dominant frequency"));
-
-      this->stop_();
-
-      if (this->frequency_sensor_ != nullptr) {
-        this->frequency_sensor_->publish_state(NAN);
-      }
-      if (this->peak_magnitude_sensor_ != nullptr) {
-        this->peak_magnitude_sensor_->publish_state(NAN);
-      }
-
-      memset(this->accum_, 0, this->num_bins_ * sizeof(float));
-      this->frame_count_ = 0;
-      this->window_sample_count_ = 0;
-      this->frame_buf_offset_ = 0;
+      this->status_set_warning(LOG_STR("Microphone is not running"));
     }
-
+    this->stop_();
+    if (any_sensor) {
+      for (auto &det : this->detectors_) {
+        if (det.detected_sensor_ != nullptr)
+          det.detected_sensor_->publish_state(false);
+      }
+    }
     return;
   }
 
@@ -138,251 +217,346 @@ void SoundFrequencyComponent::loop() {
 
   const auto &stream_info = this->microphone_source_->get_audio_stream_info();
 
-  // The sample rate is only known at runtime, so the in-band bin range and
-  // Goertzel coefficients are computed here (once, until valid).
-  if (!this->band_valid_) {
-    const float fs = static_cast<float>(stream_info.get_sample_rate());
-    this->sample_rate_hz_ = fs;
-
+  // First loop with a valid sample rate: compute Goertzel coefficients
+  if (this->sample_rate_hz_ == 0.0f) {
+    this->sample_rate_hz_ = static_cast<float>(stream_info.get_sample_rate());
     const uint32_t n = this->window_size_;
-    uint32_t k_min = static_cast<uint32_t>(std::ceil((this->min_frequency_hz_ * static_cast<double>(n)) / fs));
-    uint32_t k_max = static_cast<uint32_t>((this->max_frequency_hz_ * static_cast<double>(n) / fs));
-    if (k_min < 1) {
-      k_min = 1;
+    const float nyquist = this->sample_rate_hz_ / 2.0f;
+
+    for (uint32_t t = 0; t < this->total_filters_; ++t) {
+      float freq = this->global_freqs_[t];
+      if (freq < 20.0f)
+        freq = 20.0f;
+      if (freq > nyquist - 20.0f)
+        freq = nyquist - 20.0f;
+      const float k = (freq * static_cast<float>(n)) / this->sample_rate_hz_;
+      this->g_c2_[t] = 2.0f * cosf(2.0f * (float) M_PI * k / static_cast<float>(n));
     }
-    if (k_max > n / 2 - 1) {
-      k_max = n / 2 - 1;
-    }
 
-    this->k_min_ = k_min;
-    this->k_max_ = k_max;
-    this->band_valid_ = (k_min < k_max);
-
-    if (!this->band_valid_) {
-      ESP_LOGW(TAG,
-               "Frequency band %.0f-%.0f Hz is outside the analyzable range for a sample rate of %" PRIu32
-               " Hz and window size %" PRIu32,
-               this->min_frequency_hz_, this->max_frequency_hz_, stream_info.get_sample_rate(), n);
-    } else {
-      this->num_bins_ = k_max - k_min + 1;
-
-      // Precompute 2*cos(2*pi*k/N) for each target bin (the IIR coefficient)
-      for (uint32_t b = 0; b < this->num_bins_; ++b) {
-        const uint32_t k = k_min + b;
-        const float angle = 2.0f * (float) M_PI * (float) k / (float) n;
-        this->goertzel_c2_[b] = 2.0f * cosf(angle);
-      }
-
-      ESP_LOGW(TAG, "Goertzel band %.0f-%.0f Hz -> bins %lu-%lu (%lu bins, sample rate %" PRIu32 " Hz, N=%" PRIu32 ")",
-               this->min_frequency_hz_, this->max_frequency_hz_, static_cast<unsigned long>(k_min),
-               static_cast<unsigned long>(k_max), static_cast<unsigned long>(this->num_bins_),
-               stream_info.get_sample_rate(), n);
-    }
+    ESP_LOGI(TAG, "Goertzel init: %lu filters, N=%" PRIu16 ", fs=%" PRIu32 " Hz", (unsigned long) this->total_filters_,
+             this->window_size_, (uint32_t) stream_info.get_sample_rate());
   }
 
-  const uint32_t samples_in_window = stream_info.ms_to_samples(this->measurement_duration_ms_);
+  const uint32_t samples_in_tick = stream_info.ms_to_samples(this->tick_interval_ms_);
 
-  // Stage samples into frame_buf_ and run Goertzel on each complete N-sample frame.
-  while (this->frame_count_ < MAX_FFT_FRAMES && this->window_sample_count_ < samples_in_window) {
+  // ── Stage samples and run Goertzel on each complete frame ──
+  while (this->frame_count_ < MAX_FRAMES_PER_TICK && this->tick_sample_count_ < samples_in_tick) {
     if (this->frame_buf_offset_ >= this->window_size_) {
-      this->process_goertzel_frame_(this->frame_buf_);
+      this->process_frame_(this->frame_buf_);
       this->frame_buf_offset_ = 0;
       this->frame_count_++;
-      this->window_sample_count_ += this->window_size_;
+      this->tick_sample_count_ += this->window_size_;
     }
 
     this->audio_source_->fill(0, false);
-
-    const uint32_t samples_available = stream_info.bytes_to_samples(this->audio_source_->available());
-    if (samples_available == 0) {
+    const uint32_t available = stream_info.bytes_to_samples(this->audio_source_->available());
+    if (available == 0)
       break;
-    }
-    const int16_t *data = reinterpret_cast<const int16_t *>(this->audio_source_->mutable_data());
 
-    const uint32_t copies_needed = this->window_size_ - this->frame_buf_offset_;
-    const uint32_t copies_allowed = std::min(samples_available, copies_needed);
-    std::memcpy(this->frame_buf_ + this->frame_buf_offset_, data, stream_info.samples_to_bytes(copies_allowed));
-    this->audio_source_->consume(stream_info.samples_to_bytes(copies_allowed));
-    this->frame_buf_offset_ += copies_allowed;
+    const int16_t *data = reinterpret_cast<const int16_t *>(this->audio_source_->mutable_data());
+    const uint32_t need = this->window_size_ - this->frame_buf_offset_;
+    const uint32_t take = std::min(available, need);
+    std::memcpy(this->frame_buf_ + this->frame_buf_offset_, data, stream_info.samples_to_bytes(take));
+    this->audio_source_->consume(stream_info.samples_to_bytes(take));
+    this->frame_buf_offset_ += take;
   }
 
-  if (this->frame_count_ > 0) {
-    if (this->band_valid_) {
-      if (this->window_sample_count_ >= samples_in_window || this->frame_count_ >= MAX_FFT_FRAMES) {
-        ESP_LOGW(TAG, "Window emit: %" PRIu32 " frames, %" PRIu32 "/%" PRIu32 " samples (%" PRIu32 " ms target)",
-                 this->frame_count_, this->window_sample_count_, samples_in_window, this->measurement_duration_ms_);
-        this->emit_window_();
+  // ── Emit when the tick window is full or frame cap is hit ──
+  if (this->frame_count_ > 0 &&
+      (this->tick_sample_count_ >= samples_in_tick || this->frame_count_ >= MAX_FRAMES_PER_TICK)) {
+    this->emit_tick_();
+  }
+
+  // ── Per-detector: release & max-duration deadline ──
+  for (auto &det : this->detectors_) {
+    // Release latched detection
+    if (det.detected_latched_ && millis() >= det.release_until_ms_) {
+      det.detected_latched_ = false;
+      if (det.detected_sensor_ != nullptr)
+        det.detected_sensor_->publish_state(false);
+      ESP_LOGD(TAG, "Detector[%lu] released after %" PRIu32 " ms hold",
+               (unsigned long) &det - (unsigned long) &this->detectors_[0], det.release_time_ms_);
+    }
+
+    // Max-duration deadline: if the pattern is still incomplete after `max`,
+    // clear the cache to make way for a new detection.
+    if (det.pattern_active_) {
+      const uint32_t elapsed = millis() - det.pattern_start_ms_;
+      if (elapsed > det.max_duration_ms_) {
+        ESP_LOGD(TAG, "Detector[%lu] pattern timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%lu)",
+                 (unsigned long) &det - (unsigned long) &this->detectors_[0], (unsigned long) elapsed,
+                 (unsigned long) det.max_duration_ms_, det.match_index_, (unsigned long) det.pattern_chords_.size());
+        det.reset_pattern_();
+        if (!det.detected_latched_ && det.detected_sensor_ != nullptr)
+          det.detected_sensor_->publish_state(false);
       }
-    } else {
-      memset(this->accum_, 0, this->num_bins_ * sizeof(float));
-      this->frame_count_ = 0;
-      this->window_sample_count_ = 0;
     }
   }
 }
 
-bool SoundFrequencyComponent::process_goertzel_frame_(const int16_t *samples) {
-  const uint32_t n = this->window_size_;
-  const uint32_t nb = this->num_bins_;
+// ──────────────────────────────────────────────
+//  Goertzel frame processing
+// ──────────────────────────────────────────────
 
-  // Reset Goertzel state for this frame
-  for (uint32_t b = 0; b < nb; ++b) {
-    this->goertzel_v1_[b] = 0.0f;
-    this->goertzel_v2_[b] = 0.0f;
+void ToneSequenceComponent::process_frame_(const int16_t *samples) {
+  const uint32_t n = this->window_size_;
+  const uint32_t nf = this->total_filters_;
+
+  for (uint32_t t = 0; t < nf; ++t) {
+    this->g_v1_[t] = 0.0f;
+    this->g_v2_[t] = 0.0f;
   }
 
-  // Run the IIR recursion: v[n] = c2 * v[n-1] - v[n-2] + x[n]
-  // Process sample-by-sample across all bins for cache-friendly access to the
-  // windowed input, while bin state lives in a small contiguous array.
   for (uint32_t i = 0; i < n; ++i) {
-    const float x = static_cast<float>(samples[i]) / 32768.0f * this->window_[i];
-    for (uint32_t b = 0; b < nb; ++b) {
-      const float v = this->goertzel_c2_[b] * this->goertzel_v1_[b] - this->goertzel_v2_[b] + x;
-      this->goertzel_v2_[b] = this->goertzel_v1_[b];
-      this->goertzel_v1_[b] = v;
+    const float x = (static_cast<float>(samples[i]) / 32768.0f) * this->window_[i];
+    for (uint32_t t = 0; t < nf; ++t) {
+      const float v = this->g_c2_[t] * this->g_v1_[t] - this->g_v2_[t] + x;
+      this->g_v2_[t] = this->g_v1_[t];
+      this->g_v1_[t] = v;
     }
   }
 
-  // Optimized magnitude-squared (no complex arithmetic):
-  //   |X[k]|^2 = v1^2 + v2^2 - c2 * v1 * v2
-  // Accumulate power (periodogram averaging over the measurement window)
-  for (uint32_t b = 0; b < nb; ++b) {
-    const float v1 = this->goertzel_v1_[b];
-    const float v2 = this->goertzel_v2_[b];
-    const float mag2 = v1 * v1 + v2 * v2 - this->goertzel_c2_[b] * v1 * v2;
-    this->accum_[b] += mag2;
+  for (uint32_t t = 0; t < nf; ++t) {
+    const float v1 = this->g_v1_[t];
+    const float v2 = this->g_v2_[t];
+    this->accum_[t] += v1 * v1 + v2 * v2 - this->g_c2_[t] * v1 * v2;
+  }
+}
+
+// ──────────────────────────────────────────────
+//  Tick emission – shared spectrum, per-detector evaluation
+// ──────────────────────────────────────────────
+
+void ToneSequenceComponent::emit_tick_() {
+  const uint32_t n = this->window_size_;
+  const float ref = static_cast<float>(n);
+
+  // Average over frames in this tick, then convert to dBFS
+  if (this->frame_count_ > 0) {
+    const float inv = 1.0f / static_cast<float>(this->frame_count_);
+    for (uint32_t t = 0; t < this->total_filters_; ++t) {
+      this->accum_[t] *= inv;
+      const float p = this->accum_[t];
+      this->spectrum_db_[t] = (p > 0.0f) ? 10.0f * log10f(p / ref) : -300.0f;
+    }
+  }
+
+  // Evaluate each detector against the shared spectrum
+  for (auto &det : this->detectors_) {
+    det.evaluate_pattern_(this->spectrum_db_);
+  }
+
+  // Reset for next tick
+  memset(this->accum_, 0, this->total_filters_ * sizeof(float));
+  this->frame_count_ = 0;
+  this->tick_sample_count_ = 0;
+}
+
+// ──────────────────────────────────────────────
+//  Per-detector chord detection
+// ──────────────────────────────────────────────
+
+bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const {
+  const auto &indices = this->chord_filter_indices_[step];
+  peak_db = -300.0f;
+
+  // Every frequency in the chord must be above threshold.
+  for (size_t i = 0; i < indices.size(); ++i) {
+    const float db = spectrum_db[indices[i]];
+    if (db < this->threshold_db_) {
+      return false;
+    }
+    if (db > peak_db)
+      peak_db = db;
   }
 
   return true;
 }
 
-void SoundFrequencyComponent::emit_window_() {
-  const uint32_t n = this->window_size_;
-  const uint32_t nb = this->num_bins_;
-
-  // Average the accumulated power over the frames collected for this window
-  if (this->frame_count_ > 0) {
-    const float inv_frames = 1.0f / static_cast<float>(this->frame_count_);
-    for (uint32_t b = 0; b < nb; ++b) {
-      this->accum_[b] *= inv_frames;
-    }
+void Detector::log_chord_(uint8_t step) const {
+  const auto &chord = this->pattern_chords_[step];
+  std::string parts;
+  for (size_t i = 0; i < chord.size(); ++i) {
+    if (i > 0)
+      parts += ", ";
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.0f", chord[i]);
+    parts += buf;
   }
-
-  // Peak-pick the strongest in-band bin
-  uint32_t b_star = 0;
-  float peak_p = 0.0f;
-  if (this->band_valid_ && nb > 0) {
-    b_star = 0;
-    peak_p = this->accum_[0];
-    for (uint32_t b = 1; b < nb; ++b) {
-      if (this->accum_[b] > peak_p) {
-        peak_p = this->accum_[b];
-        b_star = b;
-      }
-    }
-  }
-
-  // Approximate dBFS for a bin-centered full-scale sine (Hann window halves in-band energy)
-  const float ref = static_cast<float>(n);
-  const float peak_db = (peak_p > 0.0f) ? 10.0f * log10f(peak_p / ref) : -300.0f;
-
-  if (this->peak_magnitude_sensor_ != nullptr) {
-    this->peak_magnitude_sensor_->publish_state(peak_db);
-  }
-
-  bool publish_frequency = false;
-  float frequency_hz = NAN;
-
-  if (this->band_valid_ && peak_db >= this->peak_threshold_db_ && nb > 0) {
-    // Sub-bin refinement: parabolic fit on log-magnitude around the peak.
-    // Requires the two adjacent bins, so skip if the peak is at the edge of
-    // the evaluated range.
-    float alpha = 0.0f;
-    if (b_star > 0 && b_star + 1 < nb) {
-      const float p_m1 = this->accum_[b_star - 1];
-      const float p_p1 = this->accum_[b_star + 1];
-      if (p_m1 > 0.0f && peak_p > 0.0f && p_p1 > 0.0f) {
-        const float db_m1 = 0.5f * log10f(p_m1);
-        const float db_0 = 0.5f * log10f(peak_p);
-        const float db_p1 = 0.5f * log10f(p_p1);
-        const float denom = db_m1 - 2.0f * db_0 + db_p1;
-        if (denom != 0.0f) {
-          alpha = 0.5f * (db_m1 - db_p1) / denom;
-          if (alpha > 0.5f) {
-            alpha = 0.5f;
-          } else if (alpha < -0.5f) {
-            alpha = -0.5f;
-          }
-        }
-      }
-    }
-
-    const uint32_t k_star = this->k_min_ + b_star;
-    frequency_hz = (static_cast<float>(k_star) + alpha) * this->sample_rate_hz_ / static_cast<float>(n);
-    publish_frequency = true;
-  }
-
-  if (this->frequency_sensor_ != nullptr) {
-    this->frequency_sensor_->publish_state(publish_frequency ? frequency_hz : NAN);
-  }
-
-  const uint32_t k_star_abs = this->k_min_ + b_star;
-  ESP_LOGW(TAG, "Window result: bin %lu (%.1f Hz), peak %.2f dB vs threshold %.1f dB -> %s",
-           static_cast<unsigned long>(k_star_abs),
-           (static_cast<float>(k_star_abs) * this->sample_rate_hz_) / static_cast<float>(n), peak_db,
-           this->peak_threshold_db_, publish_frequency ? "publish" : "suppress");
-
-  // Reset accumulators for the next measurement window
-  memset(this->accum_, 0, nb * sizeof(float));
-  this->frame_count_ = 0;
-  this->window_sample_count_ = 0;
+  ESP_LOGD(TAG, "  chord[%u] = [%s] Hz", (unsigned) step, parts.c_str());
 }
 
-void SoundFrequencyComponent::start() {
+// ──────────────────────────────────────────────
+//  Per-detector pattern state machine (time-boxed)
+// ──────────────────────────────────────────────
+
+void Detector::evaluate_pattern_(const float *spectrum_db) {
+  const uint32_t num_steps = static_cast<uint32_t>(this->pattern_chords_.size());
+  const uint32_t elapsed = millis() - this->pattern_start_ms_;
+
+  // ── IDLE – waiting for first chord ──
+  if (!this->pattern_active_) {
+    // First chord is expected at t=0; accept it whenever it appears.
+    float peak = -300.0f;
+    if (this->chord_present_(spectrum_db, 0, peak)) {
+      this->pattern_active_ = true;
+      this->match_index_ = 1;
+      this->pattern_start_ms_ = millis();
+      this->need_falling_edge_ = true;
+      ESP_LOGI(TAG, "Det pattern started: chord 1/%lu, peak %.1f dB", (unsigned long) num_steps, peak);
+      this->log_chord_(0);
+    }
+    return;
+  }
+
+  // ── WAITING FOR FALLING EDGE (previous chord must cease) ──
+  if (this->need_falling_edge_) {
+    const uint8_t prev_idx = static_cast<uint8_t>(this->match_index_ - 1);
+    float prev_peak = -300.0f;
+    const bool prev_still_present = this->chord_present_(spectrum_db, prev_idx, prev_peak);
+
+    if (prev_still_present) {
+      // If we've already passed the next chord's window start and the previous
+      // is still sounding, the pattern is unlikely to succeed. The max_duration
+      // timeout in loop() will catch persistent hangs.
+      return;
+    }
+
+    this->need_falling_edge_ = false;
+    ESP_LOGD(TAG, "Det falling edge after chord %u/%lu at t=%" PRIu32 " ms",
+             (unsigned) (prev_idx + 1), (unsigned long) num_steps, (unsigned) elapsed);
+  }
+
+  // ── ALL STEPS MATCHED – check duration and latch ──
+  if (this->match_index_ >= num_steps) {
+    const uint32_t elapsed_now = millis() - this->pattern_start_ms_;
+    if (elapsed_now >= this->min_duration_ms_) {
+      this->latch_detection_(elapsed_now);
+    } else {
+      ESP_LOGD(TAG, "Det pattern discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
+               (unsigned long) elapsed_now, (unsigned long) this->min_duration_ms_);
+      this->reset_pattern_();
+    }
+    return;
+  }
+
+  // ── MATCHING – look for the next chord within its time window ──
+  const uint32_t chord_idx = this->match_index_;
+  const uint32_t window_start = this->pattern_times_ms_[chord_idx];
+  const uint32_t window_end = (chord_idx + 1 < num_steps)
+                                 ? this->pattern_times_ms_[chord_idx + 1]
+                                 : (this->pattern_times_ms_[chord_idx] + this->tail_grace_ms_);
+
+  // Too early – the time window for this chord hasn't opened yet.
+  if (elapsed < window_start) {
+    return;
+  }
+
+  // Too late – the time window for this chord has closed without detection.
+  if (elapsed >= window_end) {
+    ESP_LOGW(TAG, "Det timed out: chord %lu/%lu not detected in window [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)",
+             (unsigned long) (chord_idx + 1), (unsigned long) num_steps,
+             (unsigned) window_start, (unsigned) window_end, (unsigned) elapsed);
+    this->reset_pattern_();
+    return;
+  }
+
+  // Within the time window – check if all frequencies of the chord are present.
+  float peak = -300.0f;
+  if (this->chord_present_(spectrum_db, chord_idx, peak)) {
+    ESP_LOGD(TAG, "Det chord %lu/%lu matched at t=%" PRIu32 " ms (window [%" PRIu32 ", %" PRIu32 "] ms), peak %.1f dB",
+             (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed,
+             (unsigned) window_start, (unsigned) window_end, peak);
+    this->log_chord_(chord_idx);
+    this->match_index_++;
+    this->need_falling_edge_ = true;
+
+    if (this->match_index_ >= num_steps) {
+      const uint32_t elapsed_now = millis() - this->pattern_start_ms_;
+      if (elapsed_now >= this->min_duration_ms_) {
+        this->latch_detection_(elapsed_now);
+      } else {
+        ESP_LOGD(TAG, "Det pattern discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
+                 (unsigned long) elapsed_now, (unsigned long) this->min_duration_ms_);
+        this->reset_pattern_();
+      }
+    }
+  }
+}
+
+void Detector::latch_detection_(uint32_t elapsed_ms) {
+  ESP_LOGI(TAG, "Det PATTERN DETECTED in %" PRIu32 " ms (%lu chord steps)", (unsigned long) elapsed_ms,
+           (unsigned long) this->pattern_chords_.size());
+
+  this->detected_latched_ = true;
+  this->release_until_ms_ = millis() + this->release_time_ms_;
+
+  if (this->detected_sensor_ != nullptr) {
+    this->detected_sensor_->publish_state(true);
+  }
+
+  this->pattern_active_ = false;
+  this->match_index_ = 0;
+  this->need_falling_edge_ = false;
+}
+
+void Detector::reset_pattern_() {
+  this->pattern_active_ = false;
+  this->match_index_ = 0;
+  this->need_falling_edge_ = false;
+}
+
+// ──────────────────────────────────────────────
+//  Public start/stop
+// ──────────────────────────────────────────────
+
+void ToneSequenceComponent::start() {
   if (this->microphone_source_->is_passive()) {
-    ESP_LOGW(TAG, "Can't start the microphone in passive mode");
+    ESP_LOGW(TAG, "Cannot start microphone in passive mode");
     return;
   }
   this->microphone_source_->start();
 }
 
-void SoundFrequencyComponent::stop() {
+void ToneSequenceComponent::stop() {
   if (this->microphone_source_->is_passive()) {
-    ESP_LOGW(TAG, "Can't stop the microphone in passive mode");
+    ESP_LOGW(TAG, "Cannot stop microphone in passive mode");
     return;
   }
   this->microphone_source_->stop();
 }
 
-bool SoundFrequencyComponent::start_() {
+// ──────────────────────────────────────────────
+//  Internal buffer management
+// ──────────────────────────────────────────────
+
+bool ToneSequenceComponent::start_() {
   if (this->audio_source_ != nullptr) {
     return true;
   }
 
   const auto &stream_info = this->microphone_source_->get_audio_stream_info();
-  const size_t bytes_per_frame = stream_info.frames_to_bytes(1);
+  const size_t bpf = stream_info.frames_to_bytes(1);
 
   this->ring_buffer_.reset();
-  const size_t ring_buffer_size =
-      (stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS) / bytes_per_frame) * bytes_per_frame;
-  std::shared_ptr<ring_buffer::RingBuffer> temp_ring_buffer = ring_buffer::RingBuffer::create(ring_buffer_size);
-  if (temp_ring_buffer == nullptr) {
+  const size_t rb_size = (stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS) / bpf) * bpf;
+  std::shared_ptr<ring_buffer::RingBuffer> rb = ring_buffer::RingBuffer::create(rb_size);
+  if (rb == nullptr) {
     this->status_momentary_error("ring_buffer", 15000);
     return false;
   }
 
-  this->audio_source_ = audio::RingBufferAudioSource::create(
-      temp_ring_buffer, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS), static_cast<uint8_t>(bytes_per_frame));
+  this->audio_source_ = audio::RingBufferAudioSource::create(rb, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS),
+                                                             static_cast<uint8_t>(bpf));
   if (this->audio_source_ == nullptr) {
     this->status_momentary_error("audio_source", 15000);
     return false;
   }
-
-  this->ring_buffer_ = temp_ring_buffer;
+  this->ring_buffer_ = rb;
 
   this->frame_buf_ = static_cast<int16_t *>(malloc((this->window_size_ + 1) * sizeof(int16_t)));
   if (this->frame_buf_ == nullptr) {
-    ESP_LOGE(TAG, "Failed to allocate Goertzel frame buffer");
+    ESP_LOGE(TAG, "Failed to allocate frame buffer");
     this->audio_source_.reset();
     this->ring_buffer_.reset();
     this->status_momentary_error("frame_buf", 15000);
@@ -393,7 +567,7 @@ bool SoundFrequencyComponent::start_() {
   return true;
 }
 
-void SoundFrequencyComponent::stop_() {
+void ToneSequenceComponent::stop_() {
   this->audio_source_.reset();
   if (this->frame_buf_ != nullptr) {
     free(this->frame_buf_);
@@ -402,6 +576,6 @@ void SoundFrequencyComponent::stop_() {
   this->frame_buf_offset_ = 0;
 }
 
-}  // namespace esphome::sound_frequency
+}  // namespace esphome::tone_sequence
 
 #endif

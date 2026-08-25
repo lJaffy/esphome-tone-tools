@@ -1,89 +1,142 @@
+"""ESPHome component: tone_sequence – detects timed tone sequences using Goertzel."""
+
 from esphome import automation
 import esphome.codegen as cg
-from esphome.components import microphone, sensor
+from esphome.components import binary_sensor, microphone
 import esphome.config_validation as cv
 from esphome.const import (
-    CONF_FREQUENCY,
+    CONF_DURATION,
     CONF_ID,
-    CONF_MEASUREMENT_DURATION,
     CONF_MICROPHONE,
+    CONF_PATTERN,
+    CONF_THRESHOLD,
     CONF_WINDOW_SIZE,
-    DEVICE_CLASS_FREQUENCY,
     PLATFORM_ESP32,
-    STATE_CLASS_MEASUREMENT,
-    UNIT_DECIBEL,
-    UNIT_HERTZ,
 )
 
-AUTO_LOAD = ["audio", "sensor"]
+AUTO_LOAD = ["audio", "binary_sensor"]
 CODEOWNERS = ["@lJaffy"]
 DEPENDENCIES = ["microphone"]
 
 
 CONF_PASSIVE = "passive"
-CONF_MIN_FREQUENCY = "min_frequency"
-CONF_MAX_FREQUENCY = "max_frequency"
-CONF_THRESHOLD_DB = "threshold_db"
-CONF_PEAK_MAGNITUDE = "peak_magnitude"
+CONF_TICK_INTERVAL = "tick_interval"
+CONF_MIN = "min"
+CONF_MAX = "max"
+CONF_DETECTED = "detected"
+CONF_DETECTORS = "detectors"
+CONF_CHORD = "chord"
+CONF_TIME = "time"
+CONF_TAIL_GRACE = "tail_grace"
 
-sound_frequency_ns = cg.esphome_ns.namespace("sound_frequency")
-SoundFrequencyComponent = sound_frequency_ns.class_(
-    "SoundFrequencyComponent", cg.Component
+tone_sequence_ns = cg.esphome_ns.namespace("tone_sequence")
+ToneSequenceComponent = tone_sequence_ns.class_("ToneSequenceComponent", cg.Component)
+StartAction = tone_sequence_ns.class_("StartAction", automation.Action)
+StopAction = tone_sequence_ns.class_("StopAction", automation.Action)
+
+
+# ── Duration (min / max expected span of the whole pattern) ──
+
+
+def _validate_duration(value):
+    min_ms = value[CONF_MIN].total_milliseconds
+    max_ms = value[CONF_MAX].total_milliseconds
+    if min_ms > max_ms:
+        raise cv.Invalid(
+            f"Duration 'min' ({min_ms}ms) must not exceed 'max' ({max_ms}ms)"
+        )
+    return value
+
+
+DURATION_SCHEMA = cv.All(
+    cv.Schema(
+        {
+            cv.Required(CONF_MIN): cv.positive_time_period_milliseconds,
+            cv.Required(CONF_MAX): cv.positive_time_period_milliseconds,
+        }
+    ),
+    _validate_duration,
 )
 
-StartAction = sound_frequency_ns.class_("StartAction", automation.Action)
-StopAction = sound_frequency_ns.class_("StopAction", automation.Action)
+
+# ── Pattern step schema (chord + time) ──
+
+PATTERN_STEP_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_CHORD): cv.All(
+            cv.ensure_list(cv.frequency),
+            cv.Length(min=1, max=8),
+        ),
+        cv.Required(CONF_TIME): cv.All(
+            cv.ensure_float,
+            cv.Range(min=0.0, max=3600.0),
+        ),
+    }
+)
 
 
-def _check_min_below_max(config):
-    if config[CONF_MIN_FREQUENCY] >= config[CONF_MAX_FREQUENCY]:
-        raise cv.Invalid(
-            f"min_frequency ({config[CONF_MIN_FREQUENCY]}Hz) must be lower than "
-            f"max_frequency ({config[CONF_MAX_FREQUENCY]}Hz)"
-        )
-    return config
+def _validate_pattern(steps):
+    """Validate that timestamps are strictly increasing and the first is 0.0."""
+    if steps[0][CONF_TIME] != 0.0:
+        raise cv.Invalid("First pattern timestamp must be 0.0 (pattern start)")
+    for i in range(1, len(steps)):
+        if steps[i][CONF_TIME] <= steps[i - 1][CONF_TIME]:
+            raise cv.Invalid(
+                f"Pattern timestamps must be strictly increasing: "
+                f"step {i} ({steps[i][CONF_TIME]}s) <= step {i - 1} ({steps[i - 1][CONF_TIME]}s)"
+            )
+    return steps
 
+
+# ── Per-detector schema ──
+
+DETECTOR_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_PATTERN): cv.All(
+            cv.ensure_list(PATTERN_STEP_SCHEMA),
+            cv.Length(min=2, max=32),
+            _validate_pattern,
+        ),
+        cv.Required(CONF_DURATION): DURATION_SCHEMA,
+        cv.Optional(CONF_THRESHOLD, default=-50.0): cv.All(
+            cv.float_, cv.Range(min=-80.0, max=0.0)
+        ),
+        cv.Optional(CONF_TAIL_GRACE, default="2s"): cv.positive_time_period_milliseconds,
+        cv.Required(CONF_DETECTED): binary_sensor.binary_sensor_schema(),
+    }
+)
+
+
+# ── Component schema ──
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
-            cv.GenerateID(): cv.declare_id(SoundFrequencyComponent),
-            cv.Optional(CONF_MEASUREMENT_DURATION, default="1000ms"): cv.All(
-                cv.positive_time_period_milliseconds,
-                cv.Range(
-                    min=cv.TimePeriod(milliseconds=50),
-                    max=cv.TimePeriod(seconds=60),
-                ),
-            ),
-            cv.Optional(
-                CONF_MICROPHONE, default={}
-            ): microphone.microphone_source_schema(
+            cv.GenerateID(): cv.declare_id(ToneSequenceComponent),
+            cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
             ),
             cv.Required(CONF_PASSIVE): cv.boolean,
             cv.Optional(CONF_WINDOW_SIZE, default=1024): cv.int_range(min=64, max=4096),
-            cv.Optional(CONF_MIN_FREQUENCY, default="100Hz"): cv.frequency,
-            cv.Optional(CONF_MAX_FREQUENCY, default="12000Hz"): cv.frequency,
-            cv.Optional(CONF_THRESHOLD_DB, default=-50.0): cv.All(
-                cv.float_, cv.Range(min=-80.0, max=0.0), cv.decibel
+            cv.Optional(CONF_TICK_INTERVAL, default="100ms"): cv.All(
+                cv.positive_time_period_milliseconds,
+                cv.Range(
+                    min=cv.TimePeriod(milliseconds=64),
+                    max=cv.TimePeriod(seconds=5),
+                ),
             ),
-            cv.Optional(CONF_FREQUENCY): sensor.sensor_schema(
-                unit_of_measurement=UNIT_HERTZ,
-                accuracy_decimals=0,
-                device_class=DEVICE_CLASS_FREQUENCY,
-                state_class=STATE_CLASS_MEASUREMENT,
-            ),
-            cv.Optional(CONF_PEAK_MAGNITUDE): sensor.sensor_schema(
-                unit_of_measurement=UNIT_DECIBEL,
-                accuracy_decimals=1,
-                state_class=STATE_CLASS_MEASUREMENT,
+            cv.Required(CONF_DETECTORS): cv.All(
+                cv.ensure_list(DETECTOR_SCHEMA),
+                cv.Length(min=1, max=8),
             ),
         }
     ).extend(cv.COMPONENT_SCHEMA),
-    _check_min_below_max,
     cv.only_on([PLATFORM_ESP32]),
 )
+
+
+# ── Code generation ──
 
 
 async def to_code(config):
@@ -94,44 +147,60 @@ async def to_code(config):
         config[CONF_MICROPHONE], passive=config[CONF_PASSIVE]
     )
     cg.add(var.set_microphone_source(mic_source))
-
-    cg.add(var.set_measurement_duration(config[CONF_MEASUREMENT_DURATION]))
     cg.add(var.set_window_size(config[CONF_WINDOW_SIZE]))
-    cg.add(var.set_min_frequency_hz(config[CONF_MIN_FREQUENCY]))
-    cg.add(var.set_max_frequency_hz(config[CONF_MAX_FREQUENCY]))
-    cg.add(var.set_peak_threshold_db(config[CONF_THRESHOLD_DB]))
+    cg.add(var.set_tick_interval(config[CONF_TICK_INTERVAL]))
 
-    if freq_config := config.get(CONF_FREQUENCY):
-        sens = await sensor.new_sensor(freq_config)
-        cg.add(var.set_frequency_sensor(sens))
+    # Build each detector
+    for _det_cfg in config[CONF_DETECTORS]:
+        cg.add(var.add_detector())  # returns an int index
 
-    if peak_config := config.get(CONF_PEAK_MAGNITUDE):
-        sens = await sensor.new_sensor(peak_config)
-        cg.add(var.set_peak_magnitude_sensor(sens))
+    for i, det_cfg in enumerate(config[CONF_DETECTORS]):
+        pattern = det_cfg[CONF_PATTERN]  # list of {chord: [...], time: float}
 
-    if not config.get(CONF_FREQUENCY) and not config.get(CONF_PEAK_MAGNITUDE):
-        raise cv.Invalid(
-            "Component must expose at least one sensor (frequency or peak_magnitude)"
-        )
+        # Build C++ nested-vector initializer for chords: {{{440.0f, 6000.0f}}, ...}
+        chord_parts = []
+        for step in pattern:
+            freq_strs = ", ".join(f"{float(f)}f" for f in step[CONF_CHORD])
+            chord_parts.append("{" + freq_strs + "}")
+        chords_cstr = "std::vector<std::vector<float>>{" + ", ".join(chord_parts) + "}"
+
+        # Build C++ time vector (seconds → ms)
+        time_parts = [f"{int(step[CONF_TIME] * 1000)}" for step in pattern]
+        times_cstr = "std::vector<uint32_t>{" + ", ".join(time_parts) + "}"
+
+        cg.add(var.detector(i).set_pattern(cg.RawExpression(chords_cstr)))
+        cg.add(var.detector(i).set_pattern_times(cg.RawExpression(times_cstr)))
+        cg.add(var.detector(i).set_min_duration_ms(det_cfg[CONF_DURATION][CONF_MIN]))
+        cg.add(var.detector(i).set_max_duration_ms(det_cfg[CONF_DURATION][CONF_MAX]))
+        cg.add(var.detector(i).set_threshold_db(det_cfg[CONF_THRESHOLD]))
+        cg.add(var.detector(i).set_tail_grace_ms(det_cfg[CONF_TAIL_GRACE]))
+
+        detected = await binary_sensor.new_binary_sensor(det_cfg[CONF_DETECTED])
+        cg.add(var.detector(i).set_detected_sensor(detected))
 
 
-SOUND_FREQUENCY_ACTION_SCHEMA = automation.maybe_simple_id(
+# ── Actions ──
+
+TONE_SEQUENCE_ACTION_SCHEMA = automation.maybe_simple_id(
     {
-        cv.GenerateID(): cv.use_id(SoundFrequencyComponent),
+        cv.GenerateID(): cv.use_id(ToneSequenceComponent),
     }
 )
 
 
 @automation.register_action(
-    "sound_frequency.start",
+    "tone_sequence.start",
     StartAction,
-    SOUND_FREQUENCY_ACTION_SCHEMA,
+    TONE_SEQUENCE_ACTION_SCHEMA,
     synchronous=True,
 )
 @automation.register_action(
-    "sound_frequency.stop", StopAction, SOUND_FREQUENCY_ACTION_SCHEMA, synchronous=True
+    "tone_sequence.stop",
+    StopAction,
+    TONE_SEQUENCE_ACTION_SCHEMA,
+    synchronous=True,
 )
-async def sound_frequency_action_to_code(config, action_id, template_arg, args):
+async def tone_sequence_action_to_code(config, action_id, template_arg, args):
     var = cg.new_Pvariable(action_id, template_arg)
     await cg.register_parented(var, config[CONF_ID])
     return var
