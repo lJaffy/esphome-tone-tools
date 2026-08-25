@@ -1,4 +1,4 @@
-#include "tone_sequence.h"
+#include "chime.h"
 
 #ifdef USE_ESP32
 
@@ -11,9 +11,9 @@
 #include <cstring>
 #include <algorithm>
 
-namespace esphome::tone_sequence {
+namespace esphome::chime {
 
-static const char *const TAG = "tone_sequence";
+static const char *const TAG = "chime";
 
 static const uint32_t MAX_FILL_DURATION_MS = 30;
 static const uint32_t RING_BUFFER_DURATION_MS = 120;
@@ -23,33 +23,39 @@ static const uint32_t MAX_FRAMES_PER_TICK = 16;
 //  Configuration
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::dump_config() {
+void ChimeComponent::dump_config() {
   ESP_LOGCONFIG(TAG,
-                "Tone Sequence Detector:\n"
+                "Chime Detector:\n"
                 "  Window Size: %" PRIu16 " samples\n"
                 "  Tick Interval: %" PRIu32 " ms\n"
-                "  Detectors: %lu\n"
+                "  Chimes: %lu\n"
                 "  Total Goertzel filters: %lu",
-                this->window_size_, this->tick_interval_ms_, (unsigned long) this->detectors_.size(),
+                this->window_size_, this->tick_interval_ms_, (unsigned long) this->chimes_.size(),
                 (unsigned long) this->total_filters_);
 
-  for (size_t d = 0; d < this->detectors_.size(); ++d) {
-    auto &det = this->detectors_[d];
-    ESP_LOGCONFIG(TAG, "    Detector[%lu]:", (unsigned long) d);
-    ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", det.min_duration_ms_);
-    ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", det.max_duration_ms_);
-    ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB", det.threshold_db_);
-    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", det.release_time_ms_);
-    ESP_LOGCONFIG(TAG, "      Chords (%lu steps):", (unsigned long) det.pattern_chords_.size());
-    for (size_t s = 0; s < det.pattern_chords_.size(); ++s) {
-      ESP_LOGCONFIG(TAG, "        [%u]:", (unsigned) s);
-      const auto &chord = det.pattern_chords_[s];
+  for (size_t d = 0; d < this->chimes_.size(); ++d) {
+    auto &c = this->chimes_[d];
+    ESP_LOGCONFIG(TAG, "    Chime[%lu]:", (unsigned long) d);
+    ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", c.min_duration_ms_);
+    ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", c.max_duration_ms_);
+    ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB", c.threshold_db_);
+    ESP_LOGCONFIG(TAG, "      Tail Grace: %" PRIu32 " ms", c.tail_grace_ms_);
+    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", c.release_time_ms_);
+    ESP_LOGCONFIG(TAG, "      Pattern (%lu steps):", (unsigned long) c.pattern_chords_.size());
+    for (size_t s = 0; s < c.pattern_chords_.size(); ++s) {
+      const auto &chord = c.pattern_chords_[s];
+      const uint32_t t_ms = (s < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[s] : NO_TIME;
+      if (t_ms == NO_TIME) {
+        ESP_LOGCONFIG(TAG, "        [%u] @ (any time):", (unsigned) s);
+      } else {
+        ESP_LOGCONFIG(TAG, "        [%u] @ %lu ms:", (unsigned) s, (unsigned long) t_ms);
+      }
       for (size_t f = 0; f < chord.size(); ++f) {
         ESP_LOGCONFIG(TAG, "          %.1f Hz", chord[f]);
       }
     }
-    if (det.detected_sensor_ != nullptr) {
-      LOG_BINARY_SENSOR("      ", "Detected:", det.detected_sensor_);
+    if (c.detected_sensor_ != nullptr) {
+      LOG_BINARY_SENSOR("      ", "Sensor:", c.detected_sensor_);
     }
   }
 }
@@ -58,7 +64,7 @@ void ToneSequenceComponent::dump_config() {
 //  Setup – one-time allocation
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::setup() {
+void ChimeComponent::setup() {
   this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
     auto rb = this->ring_buffer_.lock();
     if (rb != nullptr) {
@@ -66,17 +72,15 @@ void ToneSequenceComponent::setup() {
     }
   });
 
-  if (this->detectors_.empty()) {
-    ESP_LOGE(TAG, "No detectors configured – nothing to do");
+  if (this->chimes_.empty()) {
+    ESP_LOGE(TAG, "No chimes configured – nothing to do");
     return;
   }
 
-  // ── Build the global frequency union ──
   this->build_frequency_map_();
 
   ESP_LOGI(TAG, "Global Goertzel filters: %lu", (unsigned long) this->total_filters_);
 
-  // ── Hann window (N floats) ──
   const uint32_t n = this->window_size_;
   float *window = static_cast<float *>(malloc(n * sizeof(float)));
   if (window == nullptr) {
@@ -88,7 +92,6 @@ void ToneSequenceComponent::setup() {
   }
   this->window_ = window;
 
-  // ── Goertzel buffers (one slot per global filter) ──
   const uint32_t nf = this->total_filters_;
   float *accum = static_cast<float *>(malloc(nf * sizeof(float)));
   float *v1 = static_cast<float *>(malloc(nf * sizeof(float)));
@@ -123,23 +126,22 @@ void ToneSequenceComponent::setup() {
 }
 
 // ──────────────────────────────────────────────
-//  Build global frequency union & per-detector index mapping
+//  Build global frequency union & per-chime index mapping
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::build_frequency_map_() {
-  // Collect all unique chord frequencies across all detectors.
+void ChimeComponent::build_frequency_map_() {
   std::vector<float> all_freqs;
 
   auto add_unique = [&all_freqs](float f) {
     for (auto &existing : all_freqs) {
       if (std::fabs(existing - f) < 0.5f)
-        return;  // close enough
+        return;
     }
     all_freqs.push_back(f);
   };
 
-  for (auto &det : this->detectors_) {
-    for (const auto &chord : det.pattern_chords_) {
+  for (auto &c : this->chimes_) {
+    for (const auto &chord : c.pattern_chords_) {
       for (auto f : chord)
         add_unique(f);
     }
@@ -148,23 +150,22 @@ void ToneSequenceComponent::build_frequency_map_() {
   this->global_freqs_ = all_freqs;
   this->total_filters_ = all_freqs.size();
 
-  // For each detector, map its chord frequencies to global indices.
   auto find_global_idx = [&all_freqs](float f) -> uint32_t {
     for (uint32_t i = 0; i < all_freqs.size(); ++i) {
       if (std::fabs(all_freqs[i] - f) < 0.5f)
         return i;
     }
-    return 0;  // shouldn't happen
+    return 0;
   };
 
-  for (auto &det : this->detectors_) {
-    det.chord_filter_indices_.clear();
-    for (const auto &chord : det.pattern_chords_) {
+  for (auto &c : this->chimes_) {
+    c.chord_filter_indices_.clear();
+    for (const auto &chord : c.pattern_chords_) {
       std::vector<uint32_t> indices;
       for (auto f : chord) {
         indices.push_back(find_global_idx(f));
       }
-      det.chord_filter_indices_.push_back(indices);
+      c.chord_filter_indices_.push_back(indices);
     }
   }
 }
@@ -173,16 +174,15 @@ void ToneSequenceComponent::build_frequency_map_() {
 //  Main loop
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::loop() {
+void ChimeComponent::loop() {
   if (!this->dsp_ready_ || this->window_ == nullptr || this->accum_ == nullptr || this->g_v1_ == nullptr ||
       this->g_v2_ == nullptr || this->g_c2_ == nullptr) {
     return;
   }
 
-  // ── Check if any detector has a sensor (for mic-not-running warning) ──
   bool any_sensor = false;
-  for (auto &det : this->detectors_) {
-    if (det.detected_sensor_ != nullptr) {
+  for (auto &c : this->chimes_) {
+    if (c.detected_sensor_ != nullptr) {
       any_sensor = true;
       break;
     }
@@ -201,9 +201,9 @@ void ToneSequenceComponent::loop() {
     }
     this->stop_();
     if (any_sensor) {
-      for (auto &det : this->detectors_) {
-        if (det.detected_sensor_ != nullptr)
-          det.detected_sensor_->publish_state(false);
+      for (auto &c : this->chimes_) {
+        if (c.detected_sensor_ != nullptr)
+          c.detected_sensor_->publish_state(false);
       }
     }
     return;
@@ -215,7 +215,6 @@ void ToneSequenceComponent::loop() {
 
   const auto &stream_info = this->microphone_source_->get_audio_stream_info();
 
-  // First loop with a valid sample rate: compute Goertzel coefficients
   if (this->sample_rate_hz_ == 0.0f) {
     this->sample_rate_hz_ = static_cast<float>(stream_info.get_sample_rate());
     const uint32_t n = this->window_size_;
@@ -237,7 +236,6 @@ void ToneSequenceComponent::loop() {
 
   const uint32_t samples_in_tick = stream_info.ms_to_samples(this->tick_interval_ms_);
 
-  // ── Stage samples and run Goertzel on each complete frame ──
   while (this->frame_count_ < MAX_FRAMES_PER_TICK && this->tick_sample_count_ < samples_in_tick) {
     if (this->frame_buf_offset_ >= this->window_size_) {
       this->process_frame_(this->frame_buf_);
@@ -259,34 +257,30 @@ void ToneSequenceComponent::loop() {
     this->frame_buf_offset_ += take;
   }
 
-  // ── Emit when the tick window is full or frame cap is hit ──
   if (this->frame_count_ > 0 &&
       (this->tick_sample_count_ >= samples_in_tick || this->frame_count_ >= MAX_FRAMES_PER_TICK)) {
     this->emit_tick_();
   }
 
-  // ── Per-detector: release & max-duration deadline ──
-  for (auto &det : this->detectors_) {
-    // Release latched detection
-    if (det.detected_latched_ && millis() >= det.release_until_ms_) {
-      det.detected_latched_ = false;
-      if (det.detected_sensor_ != nullptr)
-        det.detected_sensor_->publish_state(false);
-      ESP_LOGD(TAG, "Detector[%lu] released after %" PRIu32 " ms hold",
-               (unsigned long) &det - (unsigned long) &this->detectors_[0], det.release_time_ms_);
+  // ── Per-chime: release & max-duration deadline ──
+  for (auto &c : this->chimes_) {
+    if (c.detected_latched_ && millis() >= c.release_until_ms_) {
+      c.detected_latched_ = false;
+      if (c.detected_sensor_ != nullptr)
+        c.detected_sensor_->publish_state(false);
+      ESP_LOGD(TAG, "Chime[%lu] released after %" PRIu32 " ms hold",
+               (unsigned long) &c - (unsigned long) &this->chimes_[0], c.release_time_ms_);
     }
 
-    // Max-duration deadline: if the pattern is still incomplete after `max`,
-    // clear the cache to make way for a new detection.
-    if (det.pattern_active_) {
-      const uint32_t elapsed = millis() - det.pattern_start_ms_;
-      if (elapsed > det.max_duration_ms_) {
-        ESP_LOGD(TAG, "Detector[%lu] pattern timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%lu)",
-                 (unsigned long) &det - (unsigned long) &this->detectors_[0], (unsigned long) elapsed,
-                 (unsigned long) det.max_duration_ms_, det.match_index_, (unsigned long) det.pattern_chords_.size());
-        det.reset_pattern_();
-        if (!det.detected_latched_ && det.detected_sensor_ != nullptr)
-          det.detected_sensor_->publish_state(false);
+    if (c.pattern_active_) {
+      const uint32_t elapsed = millis() - c.pattern_start_ms_;
+      if (elapsed > c.max_duration_ms_) {
+        ESP_LOGD(TAG, "Chime[%lu] timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%lu)",
+                 (unsigned long) &c - (unsigned long) &this->chimes_[0], (unsigned long) elapsed,
+                 (unsigned long) c.max_duration_ms_, c.match_index_, (unsigned long) c.pattern_chords_.size());
+        c.reset_pattern_();
+        if (!c.detected_latched_ && c.detected_sensor_ != nullptr)
+          c.detected_sensor_->publish_state(false);
       }
     }
   }
@@ -296,7 +290,7 @@ void ToneSequenceComponent::loop() {
 //  Goertzel frame processing
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::process_frame_(const int16_t *samples) {
+void ChimeComponent::process_frame_(const int16_t *samples) {
   const uint32_t n = this->window_size_;
   const uint32_t nf = this->total_filters_;
 
@@ -322,14 +316,13 @@ void ToneSequenceComponent::process_frame_(const int16_t *samples) {
 }
 
 // ──────────────────────────────────────────────
-//  Tick emission – shared spectrum, per-detector evaluation
+//  Tick emission
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::emit_tick_() {
+void ChimeComponent::emit_tick_() {
   const uint32_t n = this->window_size_;
   const float ref = static_cast<float>(n);
 
-  // Average over frames in this tick, then convert to dBFS
   if (this->frame_count_ > 0) {
     const float inv = 1.0f / static_cast<float>(this->frame_count_);
     for (uint32_t t = 0; t < this->total_filters_; ++t) {
@@ -339,26 +332,23 @@ void ToneSequenceComponent::emit_tick_() {
     }
   }
 
-  // Evaluate each detector against the shared spectrum
-  for (auto &det : this->detectors_) {
-    det.evaluate_pattern_(this->spectrum_db_);
+  for (auto &c : this->chimes_) {
+    c.evaluate_pattern_(this->spectrum_db_);
   }
 
-  // Reset for next tick
   memset(this->accum_, 0, this->total_filters_ * sizeof(float));
   this->frame_count_ = 0;
   this->tick_sample_count_ = 0;
 }
 
 // ──────────────────────────────────────────────
-//  Per-detector chord detection
+//  Per-chime chord detection
 // ──────────────────────────────────────────────
 
-bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const {
+bool Chime::chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const {
   const auto &indices = this->chord_filter_indices_[step];
   peak_db = -300.0f;
 
-  // Every frequency in the chord must be above threshold.
   for (size_t i = 0; i < indices.size(); ++i) {
     const float db = spectrum_db[indices[i]];
     if (db < this->threshold_db_) {
@@ -371,7 +361,7 @@ bool Detector::chord_present_(const float *spectrum_db, uint8_t step, float &pea
   return true;
 }
 
-void Detector::log_chord_(uint8_t step) const {
+void Chime::log_chord_(uint8_t step) const {
   const auto &chord = this->pattern_chords_[step];
   std::string parts;
   for (size_t i = 0; i < chord.size(); ++i) {
@@ -385,13 +375,14 @@ void Detector::log_chord_(uint8_t step) const {
 }
 
 // ──────────────────────────────────────────────
-//  Per-detector pattern state machine
+//  Per-chime pattern state machine
 // ──────────────────────────────────────────────
 
-void Detector::evaluate_pattern_(const float *spectrum_db) {
+void Chime::evaluate_pattern_(const float *spectrum_db) {
   const uint32_t num_steps = static_cast<uint32_t>(this->pattern_chords_.size());
+  const uint32_t elapsed = millis() - this->pattern_start_ms_;
 
-  // IDLE – waiting for first chord
+  // ── IDLE – waiting for first chord ──
   if (!this->pattern_active_) {
     float peak = -300.0f;
     if (this->chord_present_(spectrum_db, 0, peak)) {
@@ -399,62 +390,98 @@ void Detector::evaluate_pattern_(const float *spectrum_db) {
       this->match_index_ = 1;
       this->pattern_start_ms_ = millis();
       this->need_falling_edge_ = true;
-      ESP_LOGI(TAG, "Det pattern started: chord 1/%lu, peak %.1f dB", (unsigned long) num_steps, peak);
+      ESP_LOGI(TAG, "Chime pattern started: chord 1/%lu, peak %.1f dB", (unsigned long) num_steps, peak);
       this->log_chord_(0);
     }
     return;
   }
 
-  // WAITING FOR FALLING EDGE (previous chord must cease)
+  // ── WAITING FOR FALLING EDGE ──
   if (this->need_falling_edge_) {
     const uint8_t prev_idx = static_cast<uint8_t>(this->match_index_ - 1);
     float prev_peak = -300.0f;
     const bool prev_still_present = this->chord_present_(spectrum_db, prev_idx, prev_peak);
 
     if (prev_still_present) {
-      return;  // previous chord still sounding – wait
+      return;
     }
 
     this->need_falling_edge_ = false;
-    ESP_LOGD(TAG, "Det falling edge after chord %u/%lu", (unsigned) (prev_idx + 1), (unsigned long) num_steps);
+    ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms",
+             (unsigned) (prev_idx + 1), (unsigned long) num_steps, (unsigned) elapsed);
   }
 
-  // MATCHING – look for the next chord
+  // ── ALL STEPS MATCHED ──
   if (this->match_index_ >= num_steps) {
-    const uint32_t elapsed = millis() - this->pattern_start_ms_;
-    if (elapsed >= this->min_duration_ms_) {
-      this->latch_detection_(elapsed);
+    const uint32_t elapsed_now = millis() - this->pattern_start_ms_;
+    if (elapsed_now >= this->min_duration_ms_) {
+      this->latch_detection_(elapsed_now);
     } else {
-      ESP_LOGD(TAG, "Det pattern discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
-               (unsigned long) elapsed, (unsigned long) this->min_duration_ms_);
+      ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
+               (unsigned long) elapsed_now, (unsigned long) this->min_duration_ms_);
       this->reset_pattern_();
     }
     return;
   }
 
+  // ── MATCHING – look for the next chord ──
+  const uint32_t chord_idx = this->match_index_;
+  const uint32_t t_chord = (chord_idx < this->pattern_times_ms_.size())
+                               ? this->pattern_times_ms_[chord_idx]
+                               : NO_TIME;
+
+  // Time-boxed lower bound
+  if (t_chord != NO_TIME && elapsed < t_chord) {
+    return;
+  }
+
+  // Time-boxed upper bound
+  if (t_chord != NO_TIME) {
+    const uint32_t next_idx = chord_idx + 1;
+    const uint32_t t_next = (next_idx < num_steps && next_idx < this->pattern_times_ms_.size())
+                                ? this->pattern_times_ms_[next_idx]
+                                : NO_TIME;
+    const uint32_t window_end = (t_next != NO_TIME) ? t_next : (t_chord + this->tail_grace_ms_);
+
+    if (elapsed >= window_end) {
+      ESP_LOGW(TAG, "Chime timed out: chord %lu/%lu not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)",
+               (unsigned long) (chord_idx + 1), (unsigned long) num_steps,
+               (unsigned) t_chord, (unsigned) window_end, (unsigned) elapsed);
+      this->reset_pattern_();
+      return;
+    }
+  }
+
+  // Check chord presence
   float peak = -300.0f;
-  if (this->chord_present_(spectrum_db, this->match_index_, peak)) {
-    ESP_LOGD(TAG, "Det chord %lu/%lu matched, peak %.1f dB", (unsigned long) (this->match_index_ + 1),
-             (unsigned long) num_steps, peak);
-    this->log_chord_(this->match_index_);
+  if (this->chord_present_(spectrum_db, chord_idx, peak)) {
+    if (t_chord != NO_TIME) {
+      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms (from %" PRIu32 "), peak %.1f dB",
+               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed,
+               (unsigned) t_chord, peak);
+    } else {
+      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms, peak %.1f dB",
+               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed, peak);
+    }
+    this->log_chord_(chord_idx);
     this->match_index_++;
     this->need_falling_edge_ = true;
 
     if (this->match_index_ >= num_steps) {
-      const uint32_t elapsed = millis() - this->pattern_start_ms_;
-      if (elapsed >= this->min_duration_ms_) {
-        this->latch_detection_(elapsed);
+      const uint32_t elapsed_now = millis() - this->pattern_start_ms_;
+      if (elapsed_now >= this->min_duration_ms_) {
+        this->latch_detection_(elapsed_now);
       } else {
-        ESP_LOGD(TAG, "Det pattern discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
-                 (unsigned long) elapsed, (unsigned long) this->min_duration_ms_);
+        ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
+                 (unsigned long) elapsed_now, (unsigned long) this->min_duration_ms_);
         this->reset_pattern_();
       }
     }
   }
 }
 
-void Detector::latch_detection_(uint32_t elapsed_ms) {
-  ESP_LOGI(TAG, "Det PATTERN DETECTED in %" PRIu32 " ms (%lu chord steps)", (unsigned long) elapsed_ms,
+void Chime::latch_detection_(uint32_t elapsed_ms) {
+  ESP_LOGI(TAG, "CHIME DETECTED in %" PRIu32 " ms (%lu steps)", (unsigned long) elapsed_ms,
            (unsigned long) this->pattern_chords_.size());
 
   this->detected_latched_ = true;
@@ -469,7 +496,7 @@ void Detector::latch_detection_(uint32_t elapsed_ms) {
   this->need_falling_edge_ = false;
 }
 
-void Detector::reset_pattern_() {
+void Chime::reset_pattern_() {
   this->pattern_active_ = false;
   this->match_index_ = 0;
   this->need_falling_edge_ = false;
@@ -479,7 +506,7 @@ void Detector::reset_pattern_() {
 //  Public start/stop
 // ──────────────────────────────────────────────
 
-void ToneSequenceComponent::start() {
+void ChimeComponent::start() {
   if (this->microphone_source_->is_passive()) {
     ESP_LOGW(TAG, "Cannot start microphone in passive mode");
     return;
@@ -487,7 +514,7 @@ void ToneSequenceComponent::start() {
   this->microphone_source_->start();
 }
 
-void ToneSequenceComponent::stop() {
+void ChimeComponent::stop() {
   if (this->microphone_source_->is_passive()) {
     ESP_LOGW(TAG, "Cannot stop microphone in passive mode");
     return;
@@ -499,7 +526,7 @@ void ToneSequenceComponent::stop() {
 //  Internal buffer management
 // ──────────────────────────────────────────────
 
-bool ToneSequenceComponent::start_() {
+bool ChimeComponent::start_() {
   if (this->audio_source_ != nullptr) {
     return true;
   }
@@ -536,7 +563,7 @@ bool ToneSequenceComponent::start_() {
   return true;
 }
 
-void ToneSequenceComponent::stop_() {
+void ChimeComponent::stop_() {
   this->audio_source_.reset();
   if (this->frame_buf_ != nullptr) {
     free(this->frame_buf_);
@@ -545,6 +572,6 @@ void ToneSequenceComponent::stop_() {
   this->frame_buf_offset_ = 0;
 }
 
-}  // namespace esphome::tone_sequence
+}  // namespace esphome::chime
 
 #endif
