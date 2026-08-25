@@ -407,8 +407,8 @@ void Chime::evaluate_pattern_(const float *spectrum_db) {
     }
 
     this->need_falling_edge_ = false;
-    ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms",
-             (unsigned) (prev_idx + 1), (unsigned long) num_steps, (unsigned) elapsed);
+    ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms", (unsigned) (prev_idx + 1),
+             (unsigned long) num_steps, (unsigned) elapsed);
   }
 
   // ── ALL STEPS MATCHED ──
@@ -426,9 +426,7 @@ void Chime::evaluate_pattern_(const float *spectrum_db) {
 
   // ── MATCHING – look for the next chord ──
   const uint32_t chord_idx = this->match_index_;
-  const uint32_t t_chord = (chord_idx < this->pattern_times_ms_.size())
-                               ? this->pattern_times_ms_[chord_idx]
-                               : NO_TIME;
+  const uint32_t t_chord = (chord_idx < this->pattern_times_ms_.size()) ? this->pattern_times_ms_[chord_idx] : NO_TIME;
 
   // Time-boxed lower bound
   if (t_chord != NO_TIME && elapsed < t_chord) {
@@ -444,9 +442,10 @@ void Chime::evaluate_pattern_(const float *spectrum_db) {
     const uint32_t window_end = (t_next != NO_TIME) ? t_next : (t_chord + this->tail_grace_ms_);
 
     if (elapsed >= window_end) {
-      ESP_LOGW(TAG, "Chime timed out: chord %lu/%lu not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)",
-               (unsigned long) (chord_idx + 1), (unsigned long) num_steps,
-               (unsigned) t_chord, (unsigned) window_end, (unsigned) elapsed);
+      ESP_LOGW(TAG,
+               "Chime timed out: chord %lu/%lu not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)",
+               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) t_chord, (unsigned) window_end,
+               (unsigned) elapsed);
       this->reset_pattern_();
       return;
     }
@@ -457,11 +456,11 @@ void Chime::evaluate_pattern_(const float *spectrum_db) {
   if (this->chord_present_(spectrum_db, chord_idx, peak)) {
     if (t_chord != NO_TIME) {
       ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms (from %" PRIu32 "), peak %.1f dB",
-               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed,
-               (unsigned) t_chord, peak);
+               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed, (unsigned) t_chord,
+               peak);
     } else {
-      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms, peak %.1f dB",
-               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed, peak);
+      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms, peak %.1f dB", (unsigned long) (chord_idx + 1),
+               (unsigned long) num_steps, (unsigned) elapsed, peak);
     }
     this->log_chord_(chord_idx);
     this->match_index_++;

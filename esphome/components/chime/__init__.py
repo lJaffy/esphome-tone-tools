@@ -10,6 +10,7 @@ from esphome.const import (
     CONF_MICROPHONE,
     CONF_PATTERN,
     CONF_THRESHOLD,
+    CONF_TIME,
     CONF_WINDOW_SIZE,
     PLATFORM_ESP32,
 )
@@ -25,7 +26,6 @@ CONF_MIN = "min"
 CONF_MAX = "max"
 CONF_CHIMES = "chimes"
 CONF_CHORD = "chord"
-CONF_TIME = "time"
 CONF_TAIL_GRACE = "tail_grace"
 
 chime_ns = cg.esphome_ns.namespace("chime")
@@ -67,7 +67,7 @@ PATTERN_STEP_SCHEMA = cv.Schema(
             cv.Length(min=1, max=8),
         ),
         cv.Optional(CONF_TIME): cv.All(
-            cv.ensure_float,
+            cv.positive_float,
             cv.Range(min=0.0, max=3600.0),
         ),
     }
@@ -76,7 +76,9 @@ PATTERN_STEP_SCHEMA = cv.Schema(
 
 def _validate_pattern(steps):
     """If any times are provided, they must be strictly increasing among themselves."""
-    timed = [(i, s[CONF_TIME]) for i, s in enumerate(steps) if s.get(CONF_TIME) is not None]
+    timed = [
+        (i, s[CONF_TIME]) for i, s in enumerate(steps) if s.get(CONF_TIME) is not None
+    ]
     if len(timed) < 2:
         return steps
     for j in range(1, len(timed)):
@@ -101,7 +103,9 @@ CHIME_SCHEMA = binary_sensor.binary_sensor_schema().extend(
         cv.Optional(CONF_THRESHOLD, default=-50.0): cv.All(
             cv.float_, cv.Range(min=-80.0, max=0.0)
         ),
-        cv.Optional(CONF_TAIL_GRACE, default="2s"): cv.positive_time_period_milliseconds,
+        cv.Optional(
+            CONF_TAIL_GRACE, default="2s"
+        ): cv.positive_time_period_milliseconds,
     }
 )
 
