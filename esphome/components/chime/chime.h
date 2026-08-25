@@ -2,8 +2,8 @@
 
 #ifdef USE_ESP32
 
-#include
-#include
+#include <cstdint>
+#include <vector>
 
 #include "esphome/components/audio/audio_transfer_buffer.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
@@ -18,15 +18,15 @@ namespace esphome::chime {
 static constexpr uint32_t NO_TIME = 0xFFFFFFFF;
 
 // ──────────────────────────────────────────────
-// Chime – one pattern definition + binary sensor
+//  Chime – one pattern definition + binary sensor
 // ──────────────────────────────────────────────
 struct Chime {
   // ── Config ──
   /// Each inner vector is one "step" in the sequence (a chord of 1+ frequencies).
-  std::vector<std::vector> pattern_chords_;
+  std::vector<std::vector<float>> pattern_chords_;
   /// Timestamp for each chord in milliseconds from pattern start.
   /// NO_TIME (0xFFFFFFFF) means "no time constraint" for that step.
-  std::vector pattern_times_ms_;
+  std::vector<uint32_t> pattern_times_ms_;
   uint32_t min_duration_ms_{2000};
   uint32_t max_duration_ms_{5000};
   /// Hard lower bound on level (dB). The adaptive noise floor can only raise the
@@ -41,7 +41,7 @@ struct Chime {
   binary_sensor::BinarySensor *detected_sensor_{nullptr};
 
   // ── Frequency mapping (populated during setup) ──
-  std::vector<std::vector> chord_filter_indices_;
+  std::vector<std::vector<uint32_t>> chord_filter_indices_;
 
   // ── State machine ──
   bool pattern_active_{false};
@@ -52,8 +52,8 @@ struct Chime {
   bool detected_latched_{false};
 
   // ── Methods ──
-  void set_pattern(const std::vector<std::vector> &chords) { this->pattern_chords_ = chords; }
-  void set_pattern_times(const std::vector &times_ms) { this->pattern_times_ms_ = times_ms; }
+  void set_pattern(const std::vector<std::vector<float>> &chords) { this->pattern_chords_ = chords; }
+  void set_pattern_times(const std::vector<uint32_t> &times_ms) { this->pattern_times_ms_ = times_ms; }
   void set_min_duration_ms(uint32_t ms) { this->min_duration_ms_ = ms; }
   void set_max_duration_ms(uint32_t ms) {
     this->max_duration_ms_ = ms;
@@ -78,7 +78,7 @@ struct Chime {
 };
 
 // ──────────────────────────────────────────────
-// Component
+//  Component
 // ──────────────────────────────────────────────
 class ChimeComponent : public Component {
  public:
@@ -97,7 +97,7 @@ class ChimeComponent : public Component {
 
   uint8_t add_chime() {
     this->chimes_.emplace_back();
-    return static_cast(this->chimes_.size() - 1);
+    return static_cast<uint8_t>(this->chimes_.size() - 1);
   }
 
   Chime &chime(uint8_t i) { return this->chimes_[i]; }
@@ -122,10 +122,10 @@ class ChimeComponent : public Component {
   uint32_t tick_interval_ms_{100};
 
   // ── Chimes ──
-  std::vector chimes_;
+  std::vector<Chime> chimes_;
 
   // ── Audio pipeline (shared) ──
-  std::unique_ptraudio::RingBufferAudioSource audio_source_;
+  std::unique_ptr<audio::RingBufferAudioSource> audio_source_;
   std::weak_ptr<ring_buffer::RingBuffer> ring_buffer_;
   int16_t *frame_buf_{nullptr};
   uint32_t frame_buf_offset_{0};
@@ -137,7 +137,7 @@ class ChimeComponent : public Component {
   float *g_v2_{nullptr};
   float *g_c2_{nullptr};
   float *spectrum_db_{nullptr};
-  std::vector global_freqs_;
+  std::vector<float> global_freqs_;
   uint32_t total_filters_{0};
   float sample_rate_hz_{0.0f};
   bool dsp_ready_{false};
@@ -155,12 +155,12 @@ class ChimeComponent : public Component {
 };
 
 // ── Automation actions ──
-template<typename... Ts> class StartAction : public Action<Ts...>, public Parented {
+template<typename... Ts> class StartAction : public Action<Ts...>, public Parented<ChimeComponent> {
  public:
   void play(const Ts &...x) override { this->parent_->start(); }
 };
 
-template<typename... Ts> class StopAction : public Action<Ts...>, public Parented {
+template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<ChimeComponent> {
  public:
   void play(const Ts &...x) override { this->parent_->stop(); }
 };
