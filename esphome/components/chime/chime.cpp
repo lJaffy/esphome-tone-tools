@@ -7,9 +7,9 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <algorithm>
 
 namespace esphome::chime {
 
@@ -24,11 +24,11 @@ static const uint32_t DEBUG_LOG_EVERY_TICKS = 25;
 
 /// Wrap an angle into [-pi, pi].
 static inline float wrap_pi(float a) {
-  a = fmodf(a, 2.0f * (float) M_PI);
-  if (a > (float) M_PI)
-    a -= 2.0f * (float) M_PI;
-  if (a < -(float) M_PI)
-    a += 2.0f * (float) M_PI;
+  a = fmodf(a, 2.0f * (float)M_PI);
+  if (a > (float)M_PI)
+    a -= 2.0f * (float)M_PI;
+  if (a < -(float)M_PI)
+    a += 2.0f * (float)M_PI;
   return a;
 }
 
@@ -37,39 +37,51 @@ static inline float wrap_pi(float a) {
 // ──────────────────────────────────────────────
 
 void ChimeComponent::dump_config() {
-  ESP_LOGCONFIG(TAG,
-                "Chime Detector:\n"
-                "  Window Size: %" PRIu16 " samples\n"
-                "  Tick Interval: %" PRIu32 " ms\n"
-                "  Chimes: %lu\n"
-                "  Total Goertzel filters: %lu\n"
-                "  Noise Floor: alpha_down=%.3f, alpha_up=%.4f\n"
-                "  Guard Separation: %.0f Hz\n"
-                "  Phase Coherence: %s (window=%d frames, min=%d, tol=%.2f rad)",
-                this->window_size_, this->tick_interval_ms_, (unsigned long) this->chimes_.size(),
-                (unsigned long) this->total_filters_, this->noise_floor_alpha_down_, this->noise_floor_alpha_up_,
-                this->guard_separation_hz_, this->coherence_active_ ? "active" : "inactive", (int) PHASE_WINDOW_FRAMES,
-                PHASE_MIN_COHERENT, PHASE_TOLERANCE_RAD);
+  ESP_LOGCONFIG(
+      TAG,
+      "Chime Detector:\n"
+      "  Window Size: %" PRIu16 " samples\n"
+      "  Tick Interval: %" PRIu32 " ms\n"
+      "  Chimes: %lu\n"
+      "  Total Goertzel filters: %lu\n"
+      "  Noise Floor: alpha_down=%.3f, alpha_up=%.4f\n"
+      "  Guard Separation: %.0f Hz\n"
+      "  Phase Coherence: %s (window=%d frames, min=%d, tol=%.2f rad)",
+      this->window_size_, this->tick_interval_ms_,
+      (unsigned long)this->chimes_.size(), (unsigned long)this->total_filters_,
+      this->noise_floor_alpha_down_, this->noise_floor_alpha_up_,
+      this->guard_separation_hz_,
+      this->coherence_active_ ? "active" : "inactive", (int)PHASE_WINDOW_FRAMES,
+      PHASE_MIN_COHERENT, PHASE_TOLERANCE_RAD);
 
   for (size_t d = 0; d < this->chimes_.size(); ++d) {
     auto &c = this->chimes_[d];
-    ESP_LOGCONFIG(TAG, "    Chime[%lu]:", (unsigned long) d);
-    ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", c.min_duration_ms_);
-    ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", c.max_duration_ms_);
-    ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB (hard floor)", c.threshold_db_);
+    ESP_LOGCONFIG(TAG, "    Chime[%lu]:", (unsigned long)d);
+    ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms",
+                  c.min_duration_ms_);
+    ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms",
+                  c.max_duration_ms_);
+    ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB (hard floor)",
+                  c.threshold_db_);
     ESP_LOGCONFIG(TAG, "      SNR Margin: %.1f dB", c.snr_margin_db_);
-    ESP_LOGCONFIG(TAG, "      Prominence: %.1f dB (vs local background)", c.prominence_db_);
-    ESP_LOGCONFIG(TAG, "      Phase Coherence: %s", c.use_coherence_ ? "on" : "off");
+    ESP_LOGCONFIG(TAG, "      Prominence: %.1f dB (vs local background)",
+                  c.prominence_db_);
+    ESP_LOGCONFIG(TAG, "      Phase Coherence: %s",
+                  c.use_coherence_ ? "on" : "off");
     ESP_LOGCONFIG(TAG, "      Tail Grace: %" PRIu32 " ms", c.tail_grace_ms_);
-    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", c.release_time_ms_);
-    ESP_LOGCONFIG(TAG, "      Pattern (%lu steps):", (unsigned long) c.pattern_chords_.size());
+    ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)",
+                  c.release_time_ms_);
+    ESP_LOGCONFIG(TAG, "      Pattern (%lu steps):",
+                  (unsigned long)c.pattern_chords_.size());
     for (size_t s = 0; s < c.pattern_chords_.size(); ++s) {
       const auto &chord = c.pattern_chords_[s];
-      const uint32_t t_ms = (s < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[s] : NO_TIME;
+      const uint32_t t_ms =
+          (s < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[s] : NO_TIME;
       if (t_ms == NO_TIME) {
-        ESP_LOGCONFIG(TAG, "        [%u] @ (any time):", (unsigned) s);
+        ESP_LOGCONFIG(TAG, "        [%u] @ (any time):", (unsigned)s);
       } else {
-        ESP_LOGCONFIG(TAG, "        [%u] @ %lu ms:", (unsigned) s, (unsigned long) t_ms);
+        ESP_LOGCONFIG(TAG, "        [%u] @ %lu ms:", (unsigned)s,
+                      (unsigned long)t_ms);
       }
       for (size_t f = 0; f < chord.size(); ++f) {
         ESP_LOGCONFIG(TAG, "          %.1f Hz", chord[f]);
@@ -86,12 +98,13 @@ void ChimeComponent::dump_config() {
 // ──────────────────────────────────────────────
 
 void ChimeComponent::setup() {
-  this->microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
-    auto rb = this->ring_buffer_.lock();
-    if (rb != nullptr) {
-      rb->write((void *) data.data(), data.size());
-    }
-  });
+  this->microphone_source_->add_data_callback(
+      [this](const std::vector<uint8_t> &data) {
+        auto rb = this->ring_buffer_.lock();
+        if (rb != nullptr) {
+          rb->write((void *)data.data(), data.size());
+        }
+      });
 
   if (this->chimes_.empty()) {
     ESP_LOGE(TAG, "No chimes configured – nothing to do");
@@ -109,16 +122,19 @@ void ChimeComponent::setup() {
     }
   }
 
-  ESP_LOGI(TAG, "Global Goertzel filters: %lu", (unsigned long) this->total_filters_);
+  ESP_LOGI(TAG, "Global Goertzel filters: %lu",
+           (unsigned long)this->total_filters_);
 
   const uint32_t n = this->window_size_;
   float *window = static_cast<float *>(malloc(n * sizeof(float)));
   if (window == nullptr) {
-    ESP_LOGE(TAG, "Failed to allocate window buffer (%" PRIu32 " bytes)", n * sizeof(float));
+    ESP_LOGE(TAG, "Failed to allocate window buffer (%" PRIu32 " bytes)",
+             n * sizeof(float));
     return;
   }
   for (uint32_t i = 0; i < n; ++i) {
-    window[i] = 0.5f * (1.0f - cosf(2.0f * (float) M_PI * (float) i / (float) (n - 1)));
+    window[i] =
+        0.5f * (1.0f - cosf(2.0f * (float)M_PI * (float)i / (float)(n - 1)));
   }
   this->window_ = window;
 
@@ -131,8 +147,9 @@ void ChimeComponent::setup() {
   float *noise_floor = static_cast<float *>(malloc(nf * sizeof(float)));
   float *noise_floor_init = static_cast<float *>(malloc(nf * sizeof(float)));
   float *local_bg = static_cast<float *>(malloc(nf * sizeof(float)));
-  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr || spec == nullptr ||
-      noise_floor == nullptr || noise_floor_init == nullptr || local_bg == nullptr) {
+  if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr ||
+      spec == nullptr || noise_floor == nullptr ||
+      noise_floor_init == nullptr || local_bg == nullptr) {
     free(accum);
     free(v1);
     free(v2);
@@ -168,11 +185,15 @@ void ChimeComponent::setup() {
   if (this->coherence_active_) {
     float *prev_phase = static_cast<float *>(malloc(nf * sizeof(float)));
     float *expected_dphi = static_cast<float *>(malloc(nf * sizeof(float)));
-    float *coherence_err = static_cast<float *>(malloc(nf * PHASE_WINDOW_FRAMES * sizeof(float)));
-    uint8_t *coherence_count = static_cast<uint8_t *>(malloc(nf * sizeof(uint8_t)));
-    uint8_t *have_prev_phase = static_cast<uint8_t *>(malloc(nf * sizeof(uint8_t)));
+    float *coherence_err =
+        static_cast<float *>(malloc(nf * PHASE_WINDOW_FRAMES * sizeof(float)));
+    uint8_t *coherence_count =
+        static_cast<uint8_t *>(malloc(nf * sizeof(uint8_t)));
+    uint8_t *have_prev_phase =
+        static_cast<uint8_t *>(malloc(nf * sizeof(uint8_t)));
     bool *coherent = static_cast<bool *>(malloc(nf * sizeof(bool)));
-    if (prev_phase == nullptr || expected_dphi == nullptr || coherence_err == nullptr || coherence_count == nullptr ||
+    if (prev_phase == nullptr || expected_dphi == nullptr ||
+        coherence_err == nullptr || coherence_count == nullptr ||
         have_prev_phase == nullptr || coherent == nullptr) {
       free(prev_phase);
       free(expected_dphi);
@@ -180,7 +201,9 @@ void ChimeComponent::setup() {
       free(coherence_count);
       free(have_prev_phase);
       free(coherent);
-      ESP_LOGE(TAG, "Failed to allocate phase-coherence buffers; disabling coherence");
+      ESP_LOGE(
+          TAG,
+          "Failed to allocate phase-coherence buffers; disabling coherence");
     } else {
       this->prev_phase_ = prev_phase;
       this->expected_dphi_ = expected_dphi;
@@ -256,7 +279,8 @@ void ChimeComponent::build_frequency_map_() {
 // ──────────────────────────────────────────────
 
 void ChimeComponent::loop() {
-  if (!this->dsp_ready_ || this->window_ == nullptr || this->accum_ == nullptr || this->g_v1_ == nullptr ||
+  if (!this->dsp_ready_ || this->window_ == nullptr ||
+      this->accum_ == nullptr || this->g_v1_ == nullptr ||
       this->g_v2_ == nullptr || this->g_c2_ == nullptr) {
     return;
   }
@@ -308,21 +332,28 @@ void ChimeComponent::loop() {
       if (freq > nyquist - 20.0f)
         freq = nyquist - 20.0f;
       const float k = (freq * static_cast<float>(n)) / this->sample_rate_hz_;
-      this->g_c2_[t] = 2.0f * cosf(2.0f * (float) M_PI * k / static_cast<float>(n));
+      this->g_c2_[t] =
+          2.0f * cosf(2.0f * (float)M_PI * k / static_cast<float>(n));
       if (this->coherence_active_ && this->expected_dphi_ != nullptr) {
         // Expected per-frame phase increment for a coherent tone in this bin,
         // wrapped to [-pi, pi].
-        this->expected_dphi_[t] = wrap_pi(2.0f * (float) M_PI * freq * static_cast<float>(n) / this->sample_rate_hz_);
+        this->expected_dphi_[t] =
+            wrap_pi(2.0f * (float)M_PI * freq * static_cast<float>(n) /
+                    this->sample_rate_hz_);
       }
     }
 
-    ESP_LOGI(TAG, "Goertzel init: %lu filters, N=%" PRIu16 ", fs=%" PRIu32 " Hz", (unsigned long) this->total_filters_,
-             this->window_size_, (uint32_t) stream_info.get_sample_rate());
+    ESP_LOGI(TAG,
+             "Goertzel init: %lu filters, N=%" PRIu16 ", fs=%" PRIu32 " Hz",
+             (unsigned long)this->total_filters_, this->window_size_,
+             (uint32_t)stream_info.get_sample_rate());
   }
 
-  const uint32_t samples_in_tick = stream_info.ms_to_samples(this->tick_interval_ms_);
+  const uint32_t samples_in_tick =
+      stream_info.ms_to_samples(this->tick_interval_ms_);
 
-  while (this->frame_count_ < MAX_FRAMES_PER_TICK && this->tick_sample_count_ < samples_in_tick) {
+  while (this->frame_count_ < MAX_FRAMES_PER_TICK &&
+         this->tick_sample_count_ < samples_in_tick) {
     if (this->frame_buf_offset_ >= this->window_size_) {
       this->process_frame_(this->frame_buf_);
       this->frame_buf_offset_ = 0;
@@ -331,20 +362,23 @@ void ChimeComponent::loop() {
     }
 
     this->audio_source_->fill(0, false);
-    const uint32_t available = stream_info.bytes_to_samples(this->audio_source_->available());
+    const uint32_t available =
+        stream_info.bytes_to_samples(this->audio_source_->available());
     if (available == 0)
       break;
 
-    const int16_t *data = reinterpret_cast<const int16_t *>(this->audio_source_->mutable_data());
+    const int16_t *data =
+        reinterpret_cast<const int16_t *>(this->audio_source_->mutable_data());
     const uint32_t need = this->window_size_ - this->frame_buf_offset_;
     const uint32_t take = std::min(available, need);
-    std::memcpy(this->frame_buf_ + this->frame_buf_offset_, data, stream_info.samples_to_bytes(take));
+    std::memcpy(this->frame_buf_ + this->frame_buf_offset_, data,
+                stream_info.samples_to_bytes(take));
     this->audio_source_->consume(stream_info.samples_to_bytes(take));
     this->frame_buf_offset_ += take;
   }
 
-  if (this->frame_count_ > 0 &&
-      (this->tick_sample_count_ >= samples_in_tick || this->frame_count_ >= MAX_FRAMES_PER_TICK)) {
+  if (this->frame_count_ > 0 && (this->tick_sample_count_ >= samples_in_tick ||
+                                 this->frame_count_ >= MAX_FRAMES_PER_TICK)) {
     this->emit_tick_();
   }
 
@@ -355,15 +389,19 @@ void ChimeComponent::loop() {
       if (c.detected_sensor_ != nullptr)
         c.detected_sensor_->publish_state(false);
       ESP_LOGD(TAG, "Chime[%lu] released after %" PRIu32 " ms hold",
-               (unsigned long) &c - (unsigned long) &this->chimes_[0], c.release_time_ms_);
+               (unsigned long)&c - (unsigned long)&this->chimes_[0],
+               c.release_time_ms_);
     }
 
     if (c.pattern_active_) {
       const uint32_t elapsed = millis() - c.pattern_start_ms_;
       if (elapsed > c.max_duration_ms_) {
-        ESP_LOGD(TAG, "Chime[%lu] timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%lu)",
-                 (unsigned long) &c - (unsigned long) &this->chimes_[0], (unsigned long) elapsed,
-                 (unsigned long) c.max_duration_ms_, c.match_index_, (unsigned long) c.pattern_chords_.size());
+        ESP_LOGD(TAG,
+                 "Chime[%lu] timed out after %" PRIu32 " ms (max %" PRIu32
+                 " ms, matched %u/%lu)",
+                 (unsigned long)&c - (unsigned long)&this->chimes_[0],
+                 (unsigned long)elapsed, (unsigned long)c.max_duration_ms_,
+                 c.match_index_, (unsigned long)c.pattern_chords_.size());
         c.reset_pattern_();
         if (!c.detected_latched_ && c.detected_sensor_ != nullptr)
           c.detected_sensor_->publish_state(false);
@@ -386,7 +424,8 @@ void ChimeComponent::process_frame_(const int16_t *samples) {
   }
 
   for (uint32_t i = 0; i < n; ++i) {
-    const float x = (static_cast<float>(samples[i]) / 32768.0f) * this->window_[i];
+    const float x =
+        (static_cast<float>(samples[i]) / 32768.0f) * this->window_[i];
     for (uint32_t t = 0; t < nf; ++t) {
       const float v = this->g_c2_[t] * this->g_v1_[t] - this->g_v2_[t] + x;
       this->g_v2_[t] = this->g_v1_[t];
@@ -417,7 +456,20 @@ void ChimeComponent::update_phase_coherence_() {
   const uint32_t pos = this->coherence_ring_pos_;
 
   for (uint32_t t = 0; t < nf; ++t) {
-    const float phase = atan2f(this->g_v2_[t], this->g_v1_[t]);
+    // Recover the TRUE complex Goertzel output (Re, Im) from the two real
+    // recurrences v1 = s[N-1], v2 = s[N-2]. The angle of (Re, Im) advances by
+    // a constant 2*pi*f*n/fs each frame for a real tone; noise is random.
+    // (The old code used atan2(v2, v1) directly, which is not a phasor.)
+    const float v1 = this->g_v1_[t];
+    const float v2 = this->g_v2_[t];
+    const float c2 = this->g_c2_[t];
+    const float re = v1 - 0.5f * c2 * (v1 + v2);
+    float sin2 = 4.0f - c2 * c2; // = (2*sin(w))^2
+    if (sin2 < 0.0f)
+      sin2 = 0.0f; // guard against float rounding at extremes
+    const float im = 0.5f * sqrtf(sin2) * (v1 - v2);
+    const float phase = atan2f(im, re);
+
     if (this->have_prev_phase_[t]) {
       // Observed phase increment this frame, minus what a pure tone would
       // produce. A real tone -> ~0; noise -> uniform random.
@@ -443,7 +495,7 @@ int ChimeComponent::coherence_hits_(uint32_t t) const {
   const uint32_t pos = this->coherence_ring_pos_;
   int hits = 0;
   for (uint32_t i = 0; i < nvalid; ++i) {
-    const uint32_t idx = (pos + K - 1 - i) % K;  // most recent first
+    const uint32_t idx = (pos + K - 1 - i) % K; // most recent first
     if (this->coherence_err_[t * K + idx] < PHASE_TOLERANCE_RAD)
       hits++;
   }
@@ -457,7 +509,8 @@ bool ChimeComponent::bin_is_coherent_(uint32_t t) const {
     return false;
   const uint32_t nvalid = count < K ? count : K;
   const int hits = this->coherence_hits_(t);
-  const int required = std::max(2, std::min<int>(PHASE_MIN_COHERENT, (int) nvalid));
+  const int required =
+      std::max(2, std::min<int>(PHASE_MIN_COHERENT, (int)nvalid));
   return nvalid >= 2 && hits >= required;
 }
 
@@ -495,11 +548,13 @@ void ChimeComponent::emit_tick_() {
     // ── Phase-coherence mask for this tick ──
     if (this->coherence_active_ && this->prev_phase_ != nullptr) {
       // Clear stale phase coherence for bins that are currently quiet, so each
-      // new tone starts with a clean ring (important for short / gapped chords).
+      // new tone starts with a clean ring (important for short / gapped
+      // chords).
       float quiet_floor = 0.0f;
       for (auto &c : this->chimes_) {
         if (c.use_coherence_)
-          quiet_floor = std::min(quiet_floor, c.threshold_db_);  // most permissive threshold
+          quiet_floor = std::min(quiet_floor,
+                                 c.threshold_db_); // most permissive threshold
       }
       for (uint32_t t = 0; t < this->total_filters_; ++t) {
         if (this->spectrum_db_[t] < quiet_floor) {
@@ -520,13 +575,15 @@ void ChimeComponent::emit_tick_() {
   const bool floor_was_ready = this->noise_floor_ready_;
   if (!this->noise_floor_ready_) {
     // First completed tick: seed the floor with current values.
-    std::memcpy(this->noise_floor_, this->spectrum_db_, this->total_filters_ * sizeof(float));
-    std::memcpy(this->noise_floor_init_, this->spectrum_db_, this->total_filters_ * sizeof(float));
+    std::memcpy(this->noise_floor_, this->spectrum_db_,
+                this->total_filters_ * sizeof(float));
+    std::memcpy(this->noise_floor_init_, this->spectrum_db_,
+                this->total_filters_ * sizeof(float));
     this->noise_floor_ready_ = true;
   } else {
     // Asymmetric EMA: the floor tracks ambient drift but is careful not to be
-    // lifted by the chime itself. Bins occupied by an active pattern are skipped
-    // entirely so the signal never raises its own noise floor.
+    // lifted by the chime itself. Bins occupied by an active pattern are
+    // skipped entirely so the signal never raises its own noise floor.
     for (uint32_t t = 0; t < this->total_filters_; ++t) {
       if (this->bin_is_busy_(t)) {
         continue;
@@ -535,10 +592,12 @@ void ChimeComponent::emit_tick_() {
       const float floor = this->noise_floor_[t];
       if (cur < floor) {
         // Fast decay: drop quickly when the environment quiets.
-        this->noise_floor_[t] = floor + this->noise_floor_alpha_down_ * (cur - floor);
+        this->noise_floor_[t] =
+            floor + this->noise_floor_alpha_down_ * (cur - floor);
       } else {
         // Slow rise: creep up so a one-off transient doesn't spike the floor.
-        this->noise_floor_[t] = floor + this->noise_floor_alpha_up_ * (cur - floor);
+        this->noise_floor_[t] =
+            floor + this->noise_floor_alpha_up_ * (cur - floor);
       }
     }
   }
@@ -547,21 +606,30 @@ void ChimeComponent::emit_tick_() {
   for (auto &c : this->chimes_) {
     // Only chimes that opted in consult the coherence mask; others pass nullptr
     // so chord_present_ skips that gate entirely.
-    const bool *eval_coherent =
-        (c.use_coherence_ && this->coherence_active_ && this->prev_phase_ != nullptr) ? this->coherent_ : nullptr;
-    c.evaluate_pattern_(this->spectrum_db_, eval_floor, this->local_bg_db_, eval_coherent);
+    const bool *eval_coherent = (c.use_coherence_ && this->coherence_active_ &&
+                                 this->prev_phase_ != nullptr)
+                                    ? this->coherent_
+                                    : nullptr;
+    c.evaluate_pattern_(this->spectrum_db_, eval_floor, this->local_bg_db_,
+                        eval_coherent);
   }
 
-  // ── DEBUG diagnostics: show, for the step each chime is currently waiting on,
-  //    what the threshold / prominence / coherence gates see. Throttled. ──
+  // ── DEBUG diagnostics ──
   if (had_frames && (this->debug_tick_count_++ % DEBUG_LOG_EVERY_TICKS) == 0) {
     const uint32_t nf = this->total_filters_;
-    const float spec_min = *std::min_element(this->spectrum_db_, this->spectrum_db_ + nf);
-    const float spec_max = *std::max_element(this->spectrum_db_, this->spectrum_db_ + nf);
-    const float floor_min = *std::min_element(this->noise_floor_, this->noise_floor_ + nf);
-    const float floor_max = *std::max_element(this->noise_floor_, this->noise_floor_ + nf);
-    ESP_LOGD(TAG, "[diag] spectrum min/max=%.1f/%.1f dB | noise-floor min/max=%.1f/%.1f dB (ready=%s)", spec_min,
-             spec_max, floor_min, floor_max, this->noise_floor_ready_ ? "yes" : "no");
+    const float spec_min =
+        *std::min_element(this->spectrum_db_, this->spectrum_db_ + nf);
+    const float spec_max =
+        *std::max_element(this->spectrum_db_, this->spectrum_db_ + nf);
+    const float floor_min =
+        *std::min_element(this->noise_floor_, this->noise_floor_ + nf);
+    const float floor_max =
+        *std::max_element(this->noise_floor_, this->noise_floor_ + nf);
+    ESP_LOGD(TAG,
+             "[diag] spectrum min/max=%.1f/%.1f dB | noise-floor "
+             "min/max=%.1f/%.1f dB (ready=%s)",
+             spec_min, spec_max, floor_min, floor_max,
+             this->noise_floor_ready_ ? "yes" : "no");
 
     for (size_t d = 0; d < this->chimes_.size(); ++d) {
       this->log_chime_diagnostics_(d, this->chimes_[d]);
@@ -581,26 +649,26 @@ void ChimeComponent::log_chime_diagnostics_(size_t d, const Chime &c) {
   const uint32_t num_steps = static_cast<uint32_t>(c.pattern_chords_.size());
   if (num_steps == 0)
     return;
-  // The step the state machine is currently trying to satisfy: the trigger
-  // chord when idle, otherwise the next chord it's waiting for.
   uint32_t step = 0;
   if (c.pattern_active_)
     step = std::min<uint32_t>(c.match_index_, num_steps - 1);
 
   const auto &indices = c.chord_filter_indices_[step];
   const auto &freqs = c.pattern_chords_[step];
-  const bool *coherent = (this->prev_phase_ != nullptr) ? this->coherent_ : nullptr;
+  const bool *coherent =
+      (this->prev_phase_ != nullptr) ? this->coherent_ : nullptr;
 
-  const uint32_t t_ms = (step < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[step] : NO_TIME;
-  ESP_LOGD(TAG, "[diag] Chime[%lu]: state=%s, waiting for step %u/%lu (%s)", (unsigned long) d,
-           c.pattern_active_ ? "ACTIVE" : "idle", (unsigned) step, (unsigned long) num_steps,
+  const uint32_t t_ms =
+      (step < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[step] : NO_TIME;
+  ESP_LOGD(TAG, "[diag] Chime[%lu]: state=%s, waiting for step %u/%lu (%s)",
+           (unsigned long)d, c.pattern_active_ ? "ACTIVE" : "idle",
+           (unsigned)step, (unsigned long)num_steps,
            t_ms == NO_TIME ? "any time" : "timed");
 
   for (size_t i = 0; i < indices.size(); ++i) {
     const uint32_t idx = indices[i];
     const float db = this->spectrum_db_[idx];
 
-    // Threshold gate
     float eff = c.threshold_db_;
     const float nf = this->noise_floor_ready_ ? this->noise_floor_[idx] : 0.0f;
     const float adaptive = nf + c.snr_margin_db_;
@@ -608,29 +676,32 @@ void ChimeComponent::log_chime_diagnostics_(size_t d, const Chime &c) {
       eff = adaptive;
     const bool thr_ok = db >= eff;
 
-    // Prominence gate
     const float lb = this->local_bg_db_[idx];
     const bool prom_ok = (db - lb) >= c.prominence_db_;
 
-    // Coherence gate
     char coh_str[40];
     if (coherent == nullptr) {
-      snprintf(coh_str, sizeof(coh_str), "n/a%s", c.use_coherence_ ? "" : " (coherence off)");
+      snprintf(coh_str, sizeof(coh_str), "n/a%s",
+               c.use_coherence_ ? "" : " (coherence off)");
     } else {
       const int hits = this->coherence_hits_(idx);
-      const uint32_t nvalid = std::min<uint32_t>(this->coherence_count_[idx], PHASE_WINDOW_FRAMES);
+      const uint32_t nvalid =
+          std::min<uint32_t>(this->coherence_count_[idx], PHASE_WINDOW_FRAMES);
       if (c.use_coherence_) {
-        snprintf(coh_str, sizeof(coh_str), "%d/%d %s", hits, (int) nvalid, coherent[idx] ? "PASS" : "FAIL");
+        snprintf(coh_str, sizeof(coh_str), "%d/%d %s", hits, (int)nvalid,
+                 coherent[idx] ? "PASS" : "FAIL");
       } else {
-        snprintf(coh_str, sizeof(coh_str), "%d/%d (off)", hits, (int) nvalid);
+        snprintf(coh_str, sizeof(coh_str), "%d/%d (off)", hits, (int)nvalid);
       }
     }
 
     ESP_LOGD(TAG,
-             "   bin#%lu %.0fHz: db=%.1f | thr eff=%.1f (hard %.1f, floor %.1f + %.1f) = %s | "
+             "   bin#%lu %.0fHz: db=%.1f | thr eff=%.1f (hard %.1f, floor %.1f "
+             "+ %.1f) = %s | "
              "localbg=%.1f prom=%+.1f (need %.1f) = %s | coh=%s",
-             (unsigned long) idx, freqs[i], db, eff, c.threshold_db_, nf, c.snr_margin_db_, thr_ok ? "PASS" : "FAIL",
-             lb, (db - lb), c.prominence_db_, prom_ok ? "PASS" : "FAIL", coh_str);
+             (unsigned long)idx, freqs[i], db, eff, c.threshold_db_, nf,
+             c.snr_margin_db_, thr_ok ? "PASS" : "FAIL", lb, (db - lb),
+             c.prominence_db_, prom_ok ? "PASS" : "FAIL", coh_str);
   }
 }
 
@@ -645,13 +716,12 @@ void ChimeComponent::compute_local_background_() {
     for (uint32_t j = 0; j < nf; ++j) {
       if (i == j)
         continue;
-      if (std::fabs(this->global_freqs_[i] - this->global_freqs_[j]) < this->guard_separation_hz_)
-        continue;  // too close to be a valid background bin
+      if (std::fabs(this->global_freqs_[i] - this->global_freqs_[j]) <
+          this->guard_separation_hz_)
+        continue; // too close to be a valid background bin
       if (this->spectrum_db_[j] < min_db)
         min_db = this->spectrum_db_[j];
     }
-    // If no bins qualified (very small / tightly-packed filter set), fall
-    // back to the global minimum across the whole spectrum.
     if (min_db > 299.0f) {
       min_db = *std::min_element(this->spectrum_db_, this->spectrum_db_ + nf);
     }
@@ -683,8 +753,9 @@ bool ChimeComponent::bin_is_busy_(uint32_t filter_idx) const {
 //  Per-chime chord detection
 // ──────────────────────────────────────────────
 
-bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
-                           const bool *coherent, uint8_t step, float &peak_db) const {
+bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor,
+                           const float *local_bg, const bool *coherent,
+                           uint8_t step, float &peak_db) const {
   const auto &indices = this->chord_filter_indices_[step];
   peak_db = -300.0f;
 
@@ -692,8 +763,6 @@ bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, c
     const uint32_t idx = indices[i];
     const float db = spectrum_db[idx];
 
-    // 1) Effective threshold: the fixed hard floor, raised by the adaptive
-    //    local noise floor + SNR margin when the noise floor is available.
     float effective = this->threshold_db_;
     if (noise_floor != nullptr) {
       const float adaptive = noise_floor[idx] + this->snr_margin_db_;
@@ -706,13 +775,10 @@ bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, c
       return false;
     }
 
-    // 2) Prominence: must sit at least prominence_db_ above the local spectral
-    //    background. Flat broadband noise fails this because it is not a local peak.
     if (local_bg != nullptr && (db - local_bg[idx]) < this->prominence_db_) {
       return false;
     }
 
-    // 3) Phase coherence: only active when the caller opted in (coherent != nullptr).
     if (coherent != nullptr && !coherent[idx]) {
       return false;
     }
@@ -734,39 +800,39 @@ void Chime::log_chord_(uint8_t step) const {
     snprintf(buf, sizeof(buf), "%.0f", chord[i]);
     parts += buf;
   }
-  ESP_LOGD(TAG, "  chord[%u] = [%s] Hz", (unsigned) step, parts.c_str());
+  ESP_LOGD(TAG, "  chord[%u] = [%s] Hz", (unsigned)step, parts.c_str());
 }
 
 // ──────────────────────────────────────────────
 //  Per-chime pattern state machine
 // ──────────────────────────────────────────────
 
-void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
+void Chime::evaluate_pattern_(const float *spectrum_db,
+                              const float *noise_floor, const float *local_bg,
                               const bool *coherent) {
-  const uint32_t num_steps = static_cast<uint32_t>(this->pattern_chords_.size());
+  const uint32_t num_steps =
+      static_cast<uint32_t>(this->pattern_chords_.size());
   const uint32_t elapsed = millis() - this->pattern_start_ms_;
 
-  // ── IDLE – waiting for first chord ──
   if (!this->pattern_active_) {
     float peak = -300.0f;
-    if (this->chord_present_(spectrum_db, noise_floor, local_bg, coherent, 0, peak)) {
+    if (this->chord_present_(spectrum_db, noise_floor, local_bg, coherent, 0,
+                             peak)) {
       this->pattern_active_ = true;
       this->match_index_ = 1;
       this->pattern_start_ms_ = millis();
       this->need_falling_edge_ = true;
-      ESP_LOGI(TAG, "Chime pattern started: chord 1/%lu, peak %.1f dB", (unsigned long) num_steps, peak);
+      ESP_LOGI(TAG, "Chime pattern started: chord 1/%lu, peak %.1f dB",
+               (unsigned long)num_steps, peak);
       this->log_chord_(0);
     }
     return;
   }
 
-  // ── WAITING FOR FALLING EDGE ──
   if (this->need_falling_edge_) {
     const uint8_t prev_idx = static_cast<uint8_t>(this->match_index_ - 1);
     const uint8_t next_idx = static_cast<uint8_t>(this->match_index_);
 
-    // If every frequency in the previous chord also appears in the next
-    // chord, there is no component that will actually fall – skip the wait.
     const auto &prev_chord = this->pattern_chords_[prev_idx];
     const auto &next_chord = this->pattern_chords_[next_idx];
 
@@ -786,69 +852,77 @@ void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor
     }
 
     if (prev_subset_of_next) {
-      // No unique component to fall; proceed immediately.
       this->need_falling_edge_ = false;
     } else {
       float prev_peak = -300.0f;
-      if (this->chord_present_(spectrum_db, noise_floor, local_bg, coherent, prev_idx, prev_peak)) {
-        return;  // still waiting
+      if (this->chord_present_(spectrum_db, noise_floor, local_bg, coherent,
+                               prev_idx, prev_peak)) {
+        return; // still waiting
       }
       this->need_falling_edge_ = false;
-      ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms", (unsigned) (prev_idx + 1),
-               (unsigned long) num_steps, (unsigned) elapsed);
+      ESP_LOGD(TAG, "Falling edge after chord %u/%lu at t=%" PRIu32 " ms",
+               (unsigned)(prev_idx + 1), (unsigned long)num_steps,
+               (unsigned)elapsed);
     }
   }
 
-  // ── ALL STEPS MATCHED ──
   if (this->match_index_ >= num_steps) {
     const uint32_t elapsed_now = millis() - this->pattern_start_ms_;
     if (elapsed_now >= this->min_duration_ms_) {
       this->latch_detection_(elapsed_now);
     } else {
-      ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
-               (unsigned long) elapsed_now, (unsigned long) this->min_duration_ms_);
+      ESP_LOGD(TAG,
+               "Chime discounted: completed in %" PRIu32
+               " ms, below min %" PRIu32 " ms",
+               (unsigned long)elapsed_now,
+               (unsigned long)this->min_duration_ms_);
       this->reset_pattern_();
     }
     return;
   }
 
-  // ── MATCHING – look for the next chord ──
   const uint32_t chord_idx = this->match_index_;
-  const uint32_t t_chord = (chord_idx < this->pattern_times_ms_.size()) ? this->pattern_times_ms_[chord_idx] : NO_TIME;
+  const uint32_t t_chord = (chord_idx < this->pattern_times_ms_.size())
+                               ? this->pattern_times_ms_[chord_idx]
+                               : NO_TIME;
 
-  // Time-boxed lower bound
   if (t_chord != NO_TIME && elapsed < t_chord) {
     return;
   }
 
-  // Time-boxed upper bound
   if (t_chord != NO_TIME) {
     const uint32_t next_idx = chord_idx + 1;
-    const uint32_t t_next = (next_idx < num_steps && next_idx < this->pattern_times_ms_.size())
-                                ? this->pattern_times_ms_[next_idx]
-                                : NO_TIME;
-    const uint32_t window_end = (t_next != NO_TIME) ? t_next : (t_chord + this->tail_grace_ms_);
+    const uint32_t t_next =
+        (next_idx < num_steps && next_idx < this->pattern_times_ms_.size())
+            ? this->pattern_times_ms_[next_idx]
+            : NO_TIME;
+    const uint32_t window_end =
+        (t_next != NO_TIME) ? t_next : (t_chord + this->tail_grace_ms_);
 
     if (elapsed >= window_end) {
       ESP_LOGW(TAG,
-               "Chime timed out: chord %lu/%lu not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)",
-               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) t_chord, (unsigned) window_end,
-               (unsigned) elapsed);
+               "Chime timed out: chord %lu/%lu not detected in [%" PRIu32
+               ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)",
+               (unsigned long)(chord_idx + 1), (unsigned long)num_steps,
+               (unsigned)t_chord, (unsigned)window_end, (unsigned)elapsed);
       this->reset_pattern_();
       return;
     }
   }
 
-  // Check chord presence
   float peak = -300.0f;
-  if (this->chord_present_(spectrum_db, noise_floor, local_bg, coherent, chord_idx, peak)) {
+  if (this->chord_present_(spectrum_db, noise_floor, local_bg, coherent,
+                           chord_idx, peak)) {
     if (t_chord != NO_TIME) {
-      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms (from %" PRIu32 "), peak %.1f dB",
-               (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed, (unsigned) t_chord,
-               peak);
+      ESP_LOGD(TAG,
+               "Chord %lu/%lu matched at t=%" PRIu32 " ms (from %" PRIu32
+               "), peak %.1f dB",
+               (unsigned long)(chord_idx + 1), (unsigned long)num_steps,
+               (unsigned)elapsed, (unsigned)t_chord, peak);
     } else {
-      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms, peak %.1f dB", (unsigned long) (chord_idx + 1),
-               (unsigned long) num_steps, (unsigned) elapsed, peak);
+      ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms, peak %.1f dB",
+               (unsigned long)(chord_idx + 1), (unsigned long)num_steps,
+               (unsigned)elapsed, peak);
     }
     this->log_chord_(chord_idx);
     this->match_index_++;
@@ -859,8 +933,11 @@ void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor
       if (elapsed_now >= this->min_duration_ms_) {
         this->latch_detection_(elapsed_now);
       } else {
-        ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
-                 (unsigned long) elapsed_now, (unsigned long) this->min_duration_ms_);
+        ESP_LOGD(TAG,
+                 "Chime discounted: completed in %" PRIu32
+                 " ms, below min %" PRIu32 " ms",
+                 (unsigned long)elapsed_now,
+                 (unsigned long)this->min_duration_ms_);
         this->reset_pattern_();
       }
     }
@@ -868,8 +945,9 @@ void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor
 }
 
 void Chime::latch_detection_(uint32_t elapsed_ms) {
-  ESP_LOGI(TAG, "CHIME DETECTED in %" PRIu32 " ms (%lu steps)", (unsigned long) elapsed_ms,
-           (unsigned long) this->pattern_chords_.size());
+  ESP_LOGI(TAG, "CHIME DETECTED in %" PRIu32 " ms (%lu steps)",
+           (unsigned long)elapsed_ms,
+           (unsigned long)this->pattern_chords_.size());
 
   this->detected_latched_ = true;
   this->release_until_ms_ = millis() + this->release_time_ms_;
@@ -922,22 +1000,26 @@ bool ChimeComponent::start_() {
   const size_t bpf = stream_info.frames_to_bytes(1);
 
   this->ring_buffer_.reset();
-  const size_t rb_size = (stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS) / bpf) * bpf;
-  std::shared_ptr<ring_buffer::RingBuffer> rb = ring_buffer::RingBuffer::create(rb_size);
+  const size_t rb_size =
+      (stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS) / bpf) * bpf;
+  std::shared_ptr<ring_buffer::RingBuffer> rb =
+      ring_buffer::RingBuffer::create(rb_size);
   if (rb == nullptr) {
     this->status_momentary_error("ring_buffer", 15000);
     return false;
   }
 
-  this->audio_source_ = audio::RingBufferAudioSource::create(rb, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS),
-                                                             static_cast<uint8_t>(bpf));
+  this->audio_source_ = audio::RingBufferAudioSource::create(
+      rb, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS),
+      static_cast<uint8_t>(bpf));
   if (this->audio_source_ == nullptr) {
     this->status_momentary_error("audio_source", 15000);
     return false;
   }
   this->ring_buffer_ = rb;
 
-  this->frame_buf_ = static_cast<int16_t *>(malloc((this->window_size_ + 1) * sizeof(int16_t)));
+  this->frame_buf_ = static_cast<int16_t *>(
+      malloc((this->window_size_ + 1) * sizeof(int16_t)));
   if (this->frame_buf_ == nullptr) {
     ESP_LOGE(TAG, "Failed to allocate frame buffer");
     this->audio_source_.reset();
@@ -946,7 +1028,6 @@ bool ChimeComponent::start_() {
     return false;
   }
 
-  // Fresh mic start: drop any stale phase history.
   this->reset_phase_coherence_();
 
   this->status_clear_error();
@@ -962,6 +1043,6 @@ void ChimeComponent::stop_() {
   this->frame_buf_offset_ = 0;
 }
 
-}  // namespace esphome::chime
+} // namespace esphome::chime
 
 #endif
