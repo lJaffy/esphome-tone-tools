@@ -144,10 +144,17 @@ class ChimeComponent : public Component {
   /// coherence ring. Must be called once per processed frame while g_v1_/g_v2_
   /// hold the current Goertzel output.
   void update_phase_coherence_();
+  /// Number of coherent frames (out of the window) for a bin.
+  int coherence_hits_(uint32_t filter_idx) const;
   /// True if a bin's phasor has been rotating coherently over recent frames.
   bool bin_is_coherent_(uint32_t filter_idx) const;
   /// Clears all phase history (called on fresh mic start).
   void reset_phase_coherence_();
+
+  // ── Debug ──
+  /// DEBUG-only: dump the threshold / prominence / coherence state for the
+  /// step the given chime is currently waiting on.
+  void log_chime_diagnostics_(size_t chime_idx, const Chime &c);
 
   // ── Configuration (shared) ──
   microphone::MicrophoneSource *microphone_source_{nullptr};
@@ -201,6 +208,7 @@ class ChimeComponent : public Component {
   // ── Tick assembly ──
   uint32_t frame_count_{0};
   uint32_t tick_sample_count_{0};
+  uint32_t debug_tick_count_{0};
 };
 
 // ── Automation actions ──

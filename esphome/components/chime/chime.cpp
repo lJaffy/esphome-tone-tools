@@ -19,6 +19,9 @@ static const uint32_t MAX_FILL_DURATION_MS = 30;
 static const uint32_t RING_BUFFER_DURATION_MS = 120;
 static const uint32_t MAX_FRAMES_PER_TICK = 16;
 
+/// How often (in ticks) to emit DEBUG diagnostics. 100 ms tick * 25 = 2.5 s.
+static const uint32_t DEBUG_LOG_EVERY_TICKS = 25;
+
 /// Wrap an angle into [-pi, pi].
 static inline float wrap_pi(float a) {
   a = fmodf(a, 2.0f * (float) M_PI);
@@ -178,7 +181,6 @@ void ChimeComponent::setup() {
       free(have_prev_phase);
       free(coherent);
       ESP_LOGE(TAG, "Failed to allocate phase-coherence buffers; disabling coherence");
-      // Fall back: treat coherence as unavailable so detection still works.
     } else {
       this->prev_phase_ = prev_phase;
       this->expected_dphi_ = expected_dphi;
@@ -432,13 +434,12 @@ void ChimeComponent::update_phase_coherence_() {
   this->coherence_ring_pos_ = (pos + 1) % K;
 }
 
-bool ChimeComponent::bin_is_coherent_(uint32_t t) const {
+int ChimeComponent::coherence_hits_(uint32_t t) const {
   const uint32_t K = PHASE_WINDOW_FRAMES;
   const uint32_t count = this->coherence_count_[t];
   if (count == 0)
-    return false;
-
-  const uint32_t nvalid = count < K ? count : K;  // only count frames written since the last reset
+    return 0;
+  const uint32_t nvalid = count < K ? count : K;
   const uint32_t pos = this->coherence_ring_pos_;
   int hits = 0;
   for (uint32_t i = 0; i < nvalid; ++i) {
@@ -446,7 +447,16 @@ bool ChimeComponent::bin_is_coherent_(uint32_t t) const {
     if (this->coherence_err_[t * K + idx] < PHASE_TOLERANCE_RAD)
       hits++;
   }
+  return hits;
+}
 
+bool ChimeComponent::bin_is_coherent_(uint32_t t) const {
+  const uint32_t K = PHASE_WINDOW_FRAMES;
+  const uint32_t count = this->coherence_count_[t];
+  if (count == 0)
+    return false;
+  const uint32_t nvalid = count < K ? count : K;
+  const int hits = this->coherence_hits_(t);
   const int required = std::max(2, std::min<int>(PHASE_MIN_COHERENT, (int) nvalid));
   return nvalid >= 2 && hits >= required;
 }
@@ -469,8 +479,9 @@ void ChimeComponent::reset_phase_coherence_() {
 void ChimeComponent::emit_tick_() {
   const uint32_t n = this->window_size_;
   const float ref = static_cast<float>(n);
+  const bool had_frames = this->frame_count_ > 0;
 
-  if (this->frame_count_ > 0) {
+  if (had_frames) {
     const float inv = 1.0f / static_cast<float>(this->frame_count_);
     for (uint32_t t = 0; t < this->total_filters_; ++t) {
       this->accum_[t] *= inv;
@@ -541,9 +552,86 @@ void ChimeComponent::emit_tick_() {
     c.evaluate_pattern_(this->spectrum_db_, eval_floor, this->local_bg_db_, eval_coherent);
   }
 
+  // ── DEBUG diagnostics: show, for the step each chime is currently waiting on,
+  //    what the threshold / prominence / coherence gates see. Throttled. ──
+  if (had_frames && (this->debug_tick_count_++ % DEBUG_LOG_EVERY_TICKS) == 0) {
+    const uint32_t nf = this->total_filters_;
+    const float spec_min = *std::min_element(this->spectrum_db_, this->spectrum_db_ + nf);
+    const float spec_max = *std::max_element(this->spectrum_db_, this->spectrum_db_ + nf);
+    const float floor_min = *std::min_element(this->noise_floor_, this->noise_floor_ + nf);
+    const float floor_max = *std::max_element(this->noise_floor_, this->noise_floor_ + nf);
+    ESP_LOGD(TAG, "[diag] spectrum min/max=%.1f/%.1f dB | noise-floor min/max=%.1f/%.1f dB (ready=%s)", spec_min,
+             spec_max, floor_min, floor_max, this->noise_floor_ready_ ? "yes" : "no");
+
+    for (size_t d = 0; d < this->chimes_.size(); ++d) {
+      this->log_chime_diagnostics_(d, this->chimes_[d]);
+    }
+  }
+
   memset(this->accum_, 0, this->total_filters_ * sizeof(float));
   this->frame_count_ = 0;
   this->tick_sample_count_ = 0;
+}
+
+// ──────────────────────────────────────────────
+//  Debug diagnostics
+// ──────────────────────────────────────────────
+
+void ChimeComponent::log_chime_diagnostics_(size_t d, const Chime &c) {
+  const uint32_t num_steps = static_cast<uint32_t>(c.pattern_chords_.size());
+  if (num_steps == 0)
+    return;
+  // The step the state machine is currently trying to satisfy: the trigger
+  // chord when idle, otherwise the next chord it's waiting for.
+  uint32_t step = 0;
+  if (c.pattern_active_)
+    step = std::min<uint32_t>(c.match_index_, num_steps - 1);
+
+  const auto &indices = c.chord_filter_indices_[step];
+  const auto &freqs = c.pattern_chords_[step];
+  const bool *coherent = (this->prev_phase_ != nullptr) ? this->coherent_ : nullptr;
+
+  const uint32_t t_ms = (step < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[step] : NO_TIME;
+  ESP_LOGD(TAG, "[diag] Chime[%lu]: state=%s, waiting for step %u/%lu (%s)", (unsigned long) d,
+           c.pattern_active_ ? "ACTIVE" : "idle", (unsigned) step, (unsigned long) num_steps,
+           t_ms == NO_TIME ? "any time" : "timed");
+
+  for (size_t i = 0; i < indices.size(); ++i) {
+    const uint32_t idx = indices[i];
+    const float db = this->spectrum_db_[idx];
+
+    // Threshold gate
+    float eff = c.threshold_db_;
+    const float nf = this->noise_floor_ready_ ? this->noise_floor_[idx] : 0.0f;
+    const float adaptive = nf + c.snr_margin_db_;
+    if (adaptive > eff)
+      eff = adaptive;
+    const bool thr_ok = db >= eff;
+
+    // Prominence gate
+    const float lb = this->local_bg_db_[idx];
+    const bool prom_ok = (db - lb) >= c.prominence_db_;
+
+    // Coherence gate
+    char coh_str[40];
+    if (coherent == nullptr) {
+      snprintf(coh_str, sizeof(coh_str), "n/a%s", c.use_coherence_ ? "" : " (coherence off)");
+    } else {
+      const int hits = this->coherence_hits_(idx);
+      const uint32_t nvalid = std::min<uint32_t>(this->coherence_count_[idx], PHASE_WINDOW_FRAMES);
+      if (c.use_coherence_) {
+        snprintf(coh_str, sizeof(coh_str), "%d/%d %s", hits, (int) nvalid, coherent[idx] ? "PASS" : "FAIL");
+      } else {
+        snprintf(coh_str, sizeof(coh_str), "%d/%d (off)", hits, (int) nvalid);
+      }
+    }
+
+    ESP_LOGD(TAG,
+             "   bin#%lu %.0fHz: db=%.1f | thr eff=%.1f (hard %.1f, floor %.1f + %.1f) = %s | "
+             "localbg=%.1f prom=%+.1f (need %.1f) = %s | coh=%s",
+             (unsigned long) idx, freqs[i], db, eff, c.threshold_db_, nf, c.snr_margin_db_, thr_ok ? "PASS" : "FAIL",
+             lb, (db - lb), c.prominence_db_, prom_ok ? "PASS" : "FAIL", coh_str);
+  }
 }
 
 // ──────────────────────────────────────────────
