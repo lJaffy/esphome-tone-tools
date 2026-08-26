@@ -2,82 +2,16 @@
 
 #ifdef USE_ESP32
 
-#include <cstdint>
-#include <vector>
-
 #include "esphome/components/audio/audio_transfer_buffer.h"
-#include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/microphone/microphone_source.h"
 #include "esphome/components/ring_buffer/ring_buffer.h"
+#include "esphome/components/sensor/sensor.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 
-namespace esphome::tone_sequence {
+namespace esphome::sound_frequency {
 
-// ──────────────────────────────────────────────
-//  Per-detector state
-// ──────────────────────────────────────────────
-struct Detector {
-  // ── Config (set from to_code) ──
-  /// Each inner vector is one "step" in the sequence (a chord of 1+ frequencies).
-  std::vector<std::vector<float>> pattern_chords_;
-  /// Timestamp for each chord in milliseconds from pattern start (t_0 = 0).
-  std::vector<uint32_t> pattern_times_ms_;
-  uint32_t min_duration_ms_{2000};
-  uint32_t max_duration_ms_{5000};
-  float threshold_db_{-50.0f};
-  /// Grace period (ms) after the last chord's timestamp for its detection window.
-  uint32_t tail_grace_ms_{2000};
-  /// Derived automatically: max_duration_ms_ + 2000.
-  uint32_t release_time_ms_{7000};
-  binary_sensor::BinarySensor *detected_sensor_{nullptr};
-
-  // ── Frequency mapping (populated during setup) ──
-  /// chord_filter_indices_[step] = list of global Goertzel indices for each freq in that chord
-  std::vector<std::vector<uint32_t>> chord_filter_indices_;
-
-  // ── Pattern state machine ──
-  bool pattern_active_{false};
-  uint8_t match_index_{0};
-  uint32_t pattern_start_ms_{0};
-  bool need_falling_edge_{false};
-  uint32_t release_until_ms_{0};
-  bool detected_latched_{false};
-
-  // ── Methods ──
-  void set_pattern(const std::vector<std::vector<float>> &chords) { this->pattern_chords_ = chords; }
-  void set_pattern_times(const std::vector<uint32_t> &times_ms) { this->pattern_times_ms_ = times_ms; }
-  void set_min_duration_ms(uint32_t ms) { this->min_duration_ms_ = ms; }
-  void set_max_duration_ms(uint32_t ms) {
-    this->max_duration_ms_ = ms;
-    this->release_time_ms_ = ms + 2000;
-  }
-  void set_threshold_db(float db) { this->threshold_db_ = db; }
-  void set_tail_grace_ms(uint32_t ms) { this->tail_grace_ms_ = ms; }
-  void set_detected_sensor(binary_sensor::BinarySensor *s) { this->detected_sensor_ = s; }
-
-  /// Returns true if every frequency in chord[step] is above threshold.
-  /// Sets peak_db to the strongest component.
-  bool chord_present_(const float *spectrum_db, uint8_t step, float &peak_db) const;
-
-  /// Log a human-readable description of a chord (e.g. "[440.0, 6000.0] Hz").
-  void log_chord_(uint8_t step) const;
-
-  // State-machine methods
-  void evaluate_pattern_(const float *spectrum_db);
-  void latch_detection_(uint32_t elapsed_ms);
-  void reset_pattern_();
-  void reset_all_() {
-    this->pattern_active_ = false;
-    this->match_index_ = 0;
-    this->need_falling_edge_ = false;
-  }
-};
-
-// ──────────────────────────────────────────────
-//  Component
-// ──────────────────────────────────────────────
-class ToneSequenceComponent : public Component {
+class SoundFrequencyComponent : public Component {
  public:
   void dump_config() override;
   void setup() override;
@@ -85,83 +19,98 @@ class ToneSequenceComponent : public Component {
 
   float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION; }
 
-  // ── Configuration setters (called from to_code) ──
-  void set_microphone_source(microphone::MicrophoneSource *mic) { this->microphone_source_ = mic; }
-  void set_window_size(uint16_t n) { this->window_size_ = n; }
-  void set_tick_interval(uint32_t ms) { this->tick_interval_ms_ = ms; }
-
-  /// Adds an empty detector; returns its index.
-  uint8_t add_detector() {
-    this->detectors_.emplace_back();
-    return static_cast<uint8_t>(this->detectors_.size() - 1);
+  void set_measurement_duration(uint32_t measurement_duration_ms) {
+    this->measurement_duration_ms_ = measurement_duration_ms;
+  }
+  void set_microphone_source(microphone::MicrophoneSource *microphone_source) {
+    this->microphone_source_ = microphone_source;
+  }
+  void set_window_size(uint16_t window_size) { this->window_size_ = window_size; }
+  void set_min_frequency_hz(float min_frequency_hz) { this->min_frequency_hz_ = min_frequency_hz; }
+  void set_max_frequency_hz(float max_frequency_hz) { this->max_frequency_hz_ = max_frequency_hz; }
+  void set_peak_threshold_db(float peak_threshold_db) { this->peak_threshold_db_ = peak_threshold_db; }
+  void set_frequency_sensor(sensor::Sensor *frequency_sensor) { this->frequency_sensor_ = frequency_sensor; }
+  void set_peak_magnitude_sensor(sensor::Sensor *peak_magnitude_sensor) {
+    this->peak_magnitude_sensor_ = peak_magnitude_sensor;
   }
 
-  /// Access a detector by index (for to_code property setting).
-  Detector &detector(uint8_t i) { return this->detectors_[i]; }
-
-  // ── Automation actions ──
+  /// @brief Starts the MicrophoneSource to start measuring the dominant frequency
   void start();
+
+  /// @brief Stops the MicrophoneSource
   void stop();
 
  protected:
+  /// @brief Internal start command that, if necessary, allocates a ring buffer and a zero-copy
+  /// ``RingBufferAudioSource`` that reads directly from it. ``ring_buffer_`` weakly references the
+  /// ring buffer owned by ``audio_source_``. Returns true if allocations were successful.
   bool start_();
+
+  /// @brief Internal stop command that deallocates ``audio_source_`` (which releases its ring buffer)
   void stop_();
 
-  /// Runs the Goertzel IIR for each global filter over one N-sample frame.
-  void process_frame_(const int16_t *samples);
+  /// @brief Runs the Goertzel IIR recursion on one full N-sample window for all in-band bins
+  /// and accumulates the resulting power into ``accum_``
+  bool process_goertzel_frame_(const int16_t *samples);
 
-  /// Averages accum[] into dBFS spectrum, then evaluates every detector.
-  void emit_tick_();
+  /// @brief Averages the accumulated power spectrum, picks the in-band peak, refines it sub-bin, and publishes
+  void emit_window_();
 
-  /// Build the union of all frequencies and map each detector's chords
-  /// to indices in the global filter array.
-  void build_frequency_map_();
+  microphone::MicrophoneSource *microphone_source_;
 
-  // ── Configuration (shared) ──
-  microphone::MicrophoneSource *microphone_source_{nullptr};
-  uint16_t window_size_{1024};
-  uint32_t tick_interval_ms_{100};
+  sensor::Sensor *frequency_sensor_{nullptr};
+  sensor::Sensor *peak_magnitude_sensor_{nullptr};
 
-  // ── Detectors ──
-  std::vector<Detector> detectors_;
-
-  // ── Audio pipeline (shared) ──
   std::unique_ptr<audio::RingBufferAudioSource> audio_source_;
   std::weak_ptr<ring_buffer::RingBuffer> ring_buffer_;
+
+  uint16_t window_size_{1024};
+  float min_frequency_hz_{100.0f};
+  float max_frequency_hz_{12000.0f};
+  float peak_threshold_db_{-50.0f};
+
+  uint32_t measurement_duration_ms_{1000};
+
+  // DSP working set, allocated once in setup() – no heap is touched from loop() after that
+  float *window_{nullptr};       ///< Hann window coefficients, N floats
+  float *accum_{nullptr};        ///< averaged power spectrum accumulator, num_bins_ floats
+  float *goertzel_v1_{nullptr};  ///< IIR state v1 (previous sample), num_bins_ floats
+  float *goertzel_v2_{nullptr};  ///< IIR state v2 (sample before previous), num_bins_ floats
+  float *goertzel_c2_{nullptr};  ///< precomputed 2·cos(2πk/N) per bin, num_bins_ floats
+
+  uint32_t k_min_{0};     ///< first in-band DFT bin index (excludes DC)
+  uint32_t k_max_{0};     ///< last in-band DFT bin index (excludes Nyquist)
+  uint32_t num_bins_{0};  ///< number of Goertzel filters = k_max - k_min + 1 (valid once band is known)
+
+  float sample_rate_hz_{0.0f};  ///< runtime sample rate taken from the microphone device
+
+  bool dsp_initialized_{false};
+  bool band_valid_{false};
+
+  uint32_t diagnostic_log_ms_{0};          ///< wall-clock time of the last periodic diagnostic log (ms)
+  bool diagnostic_window_emitted_{false};  ///< true once the first measurement window has been emitted
+
+  uint32_t frame_count_{0};          ///< Goertzel frames accumulated into ``accum_`` since the last window emit
+  uint32_t window_sample_count_{0};  ///< samples consumed since the last window emit
+
+  // Ring buffer for partial frames. The audio source only exposes up to MAX_FILL_DURATION_MS of audio per
+  // fill() call, which is usually far less than a full N-sample window, so the window must be assembled from
+  // several fill/consume cycles. Samples are staged here and run through Goertzel in whole-window units.
+  // Allocated in start_() (re-created whenever the audio source is created), freed in stop_().
   int16_t *frame_buf_{nullptr};
-  uint32_t frame_buf_offset_{0};
-
-  // ── Goertzel DSP state (shared, sized for the union of all frequencies) ──
-  float *window_{nullptr};
-  float *accum_{nullptr};
-  float *g_v1_{nullptr};
-  float *g_v2_{nullptr};
-  float *g_c2_{nullptr};
-  float *spectrum_db_{nullptr};
-
-  // Global frequency list (all unique tones across all detectors)
-  std::vector<float> global_freqs_;
-  uint32_t total_filters_{0};
-
-  float sample_rate_hz_{0.0f};
-  bool dsp_ready_{false};
-
-  // ── Tick assembly ──
-  uint32_t frame_count_{0};
-  uint32_t tick_sample_count_{0};
+  uint32_t frame_buf_offset_{0};  ///< samples currently staged in ``frame_buf_``
 };
 
-// ── Automation actions ──
-template<typename... Ts> class StartAction : public Action<Ts...>, public Parented<ToneSequenceComponent> {
+template<typename... Ts> class StartAction : public Action<Ts...>, public Parented<SoundFrequencyComponent> {
  public:
   void play(const Ts &...x) override { this->parent_->start(); }
 };
 
-template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<ToneSequenceComponent> {
+template<typename... Ts> class StopAction : public Action<Ts...>, public Parented<SoundFrequencyComponent> {
  public:
   void play(const Ts &...x) override { this->parent_->stop(); }
 };
 
-}  // namespace esphome::tone_sequence
+}  // namespace esphome::sound_frequency
 
 #endif
