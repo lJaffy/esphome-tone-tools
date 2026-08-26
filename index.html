@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            background-color: white;
+            /* Ensure the iframe has a white background */
+        }
+    </style>
+</head>
+
+<body>
+    <!DOCTYPE html>
+    <html lang="en">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {
+                background-color: white;
+                /* Ensure the iframe has a white background */
+            }
+        </style>
+    </head>
+
+    <body>
+        <style>
+            body {
+                background-color: white;
+            }
+        </style>
+        <html lang="en">
+
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <title>Beep Detector — Spectral Gate Tuner</title>
+            <style>
+                :root {
+                    --bg: #111418;
+                    --panel: #171b21;
+                    --line: #262c34;
+                    --txt: #d6dbe2;
+                    --dim: #8a94a0;
+                    --acc: #3fd0ff;
+                    --warn: #ff5c5c
+                }
+
+                * {
+                    box-sizing: border-box
+                }
+
+                html,
+                body {
+                    margin: 0;
+                    padding: 0
+                }
+
+                body {
+                    background: var(--bg);
+                    color: var(--txt);
+                    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif
+                }
+
+                h1 {
+                    font-size: 15px;
+                    font-weight: 600;
+                    letter-spacing: .04em;
+                    text-transform: uppercase;
+                    color: var(--acc);
+                    margin: 0 0 2px
+                }
+
+                .sub {
+                    font-size: 12px;
+                    color: var(--dim);
+                    margin: 0 0 14px
+                }
+
+                .wrap {
+                    max-width: 1240px;
+                    margin: 0 auto;
+                    padding: 18px 20px 60px
+                }
+
+                button {
+                    background: #1d232b;
+                    color: var(--txt);
+                    border: 1px solid var(--line);
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    cursor: pointer;
+                    font: inherit;
+                    font-size: 13px
+                }
+
+                button:hover {
+                    border-color: #3a4450;
+                    background: #232a34
+                }
+
+                button:disabled {
+                    opacity: .4;
+                    cursor: default
+                }
+
+                input[type=range] {
+                    accent-color: var(--acc);
+                    width: 100%
+                }
+
+                input[type=file] {
+                    font-size: 12px;
+                    color: var(--dim)
+                }
+
+                input[type=number] {
+                    background: #0f1318;
+                    color: var(--txt);
+                    border: 1px solid var(--line);
+                    border-radius: 4px;
+                    padding: 4px 6px;
+                    width: 86px;
+                    font: 12px ui-monospace, monospace
+                }
+
+                .row {
+                    display: flex;
+                    gap: 18px;
+                    align-items: center;
+                    flex-wrap: wrap;
+                    padding: 12px 14px;
+                    background: var(--panel);
+                    border: 1px solid var(--line);
+                    border-radius: 8px
+                }
+
+                .meta {
+                    color: var(--dim);
+                    font-size: 12.5px;
+                    font-family: ui-monospace, monospace
+                }
+
+                .panel {
+                    background: var(--panel);
+                    border: 1px solid var(--line);
+                    border-radius: 8px;
+                    padding: 12px 14px;
+                    margin-top: 14px
+                }
+
+                .pgrid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+                    gap: 10px 18px
+                }
+
+                .ctl {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px
+                }
+
+                .ctl .lab {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: baseline
+                }
+
+                .ctl .lab span {
+                    font-size: 12.5px;
+                    color: var(--dim)
+                }
+
+                .ctl .lab i {
+                    font-style: normal;
+                    color: var(--acc);
+                    font: 600 12px ui-monospace, monospace
+                }
+
+                .btns {
+                    display: flex;
+                    gap: 10px;
+                    align-items: center;
+                    margin-top: 12px;
+                    flex-wrap: wrap
+                }
+
+                #cv {
+                    display: block;
+                    width: 100%;
+                    height: 470px;
+                    background: #0a0d11;
+                    border: 1px solid var(--line);
+                    border-radius: 8px;
+                    cursor: crosshair
+                }
+
+                #readout {
+                    font: 11.5px ui-monospace, monospace;
+                    color: var(--dim);
+                    height: 18px;
+                    margin-top: 6px
+                }
+
+                #status {
+                    font: 12px ui-monospace, monospace;
+                    color: var(--dim);
+                    margin-top: 8px;
+                    min-height: 16px
+                }
+
+                #msg {
+                    color: var(--warn);
+                    font-size: 13px;
+                    min-height: 18px;
+                    margin-top: 6px
+                }
+
+                #msg:empty {
+                    display: none
+                }
+
+                #tablewrap {
+                    max-height: 420px;
+                    overflow: auto
+                }
+
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    font-size: 12.5px
+                }
+
+                th,
+                td {
+                    border-bottom: 1px solid var(--line);
+                    padding: 6px 10px;
+                    text-align: left;
+                    vertical-align: top
+                }
+
+                th {
+                    position: sticky;
+                    top: 0;
+                    background: var(--panel);
+                    color: var(--dim);
+                    font-weight: 600;
+                    font-size: 11px;
+                    text-transform: uppercase;
+                    letter-spacing: .05em;
+                    z-index: 1
+                }
+
+                td.mono,
+                th {
+                    font-family: ui-monospace, monospace
+                }
+
+                td.mono {
+                    font-size: 12px
+                }
+
+                td.peak {
+                    color: var(--acc);
+                    font-weight: 600
+                }
+
+                .empty {
+                    color: var(--dim);
+                    font-size: 13px;
+                    padding: 14px
+                }
+
+                button.play {
+                    padding: 1px 8px;
+                    font-size: 11px;
+                    border-radius: 4px
+                }
+
+                tr.unsel td {
+                    color: var(--dim)
+                }
+
+                .pk {
+                    cursor: pointer;
+                    text-decoration: underline dotted rgba(255, 255, 255, .3);
+                    font-family: ui-monospace, monospace;
+                    font-size: 12px
+                }
+
+                .pk:hover {
+                    text-decoration: underline solid var(--acc)
+                }
+
+                .pk.off {
+                    text-decoration: line-through;
+                    opacity: .45
+                }
+            </style>
+        </head>
+
+        <body>
+            <div class="wrap">
+                <h1>Beep Detector — Spectral Gate Tuner</h1>
+                <div class="sub">Load a clip, tune the gates, watch the surviving segments. Downsampled to 16 kHz · FFT
+                    1024 · Hann · 50% overlap · all in-browser.</div>
+
+                <div class="row">
+                    <input type="file" id="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,audio/*">
+                    <span class="meta" id="meta">no file loaded</span>
+                    <span style="flex:1"></span>
+                    <button id="btnPlay" disabled>▶ Play</button>
+                    <button id="btnStop" disabled>■ Stop</button>
+                    <span class="meta" id="pos"></span>
+                </div>
+                <div id="msg"></div>
+
+                <div class="panel">
+                    <div class="pgrid">
+                        <div class="ctl">
+                            <div class="lab"><span>Noise floor</span><i><input type="number" id="n_nlf" step="1"> dB</i>
+                            </div><input type="range" id="r_nlf" min="-80" max="-10" step="1">
+                        </div>
+                        <div class="ctl">
+                            <div class="lab"><span>Min beep length</span><i><input type="number" id="n_minlen" step="5">
+                                    ms</i></div><input type="range" id="r_minlen" min="10" max="500" step="5">
+                        </div>
+                        <div class="ctl">
+                            <div class="lab"><span>Max beep length</span><i><input type="number" id="n_maxlen"
+                                        step="50"> ms</i></div><input type="range" id="r_maxlen" min="100" max="5000"
+                                step="50">
+                        </div>
+                        <div class="ctl">
+                            <div class="lab"><span>Min frequency</span><i><input type="number" id="n_fmin" step="10">
+                                    Hz</i></div><input type="range" id="r_fmin" min="50" max="8000" step="10">
+                        </div>
+                        <div class="ctl">
+                            <div class="lab"><span>Max frequency</span><i><input type="number" id="n_fmax" step="100">
+                                    Hz</i></div><input type="range" id="r_fmax" min="500" max="8000" step="100">
+                        </div>
+                        <div class="ctl">
+                            <div class="lab"><span>Top N frequencies</span><i><input type="number" id="n_topn" min="1"
+                                        max="10" step="1"></i></div><input type="range" id="r_topn" min="1" max="10"
+                                step="1">
+                        </div>
+                        <!-- new: bandpass quality for "Play selected" -->
+                        <div class="ctl">
+                            <div class="lab"><span>Bandpass Q (play)</span><i><input type="number" id="n_bpq" min="1"
+                                        max="30" step="1"></i></div><input type="range" id="r_bpq" min="1" max="30"
+                                step="1">
+                        </div>
+                    </div>
+                    <div class="btns">
+                        <button id="btnReset">Reset to defaults</button>
+                        <button id="btnExport">Download CSV (selected)</button>
+                        <button id="btnPlaySel">▶ Play selected</button>
+                        <label><input type="checkbox" id="chkRaw"> show raw (ignore all gates)</label>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <canvas id="cv"></canvas>
+                    <div id="readout"></div>
+                    <div id="status"></div>
+                </div>
+
+                <div class="panel">
+                    <div id="tablewrap">
+                        <table id="tbl">
+                            <thead>
+                                <tr>
+                                    <th><input type="checkbox" id="chkAll" title="select all / none"></th>
+                                    <th>#</th>
+                                    <th>start (s)</th>
+                                    <th>dur (ms)</th>
+                                    <th>top N frequencies (Hz / dB)</th>
+                                    <th>peak (dB)</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                        <div class="empty" id="empty">Load an audio file to begin.</div>
+                    </div>
+                </div>
+                <div class="panel" id="yamlPanel">
+                    <div
+                        style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">
+                        Selected — YAML</div>
+                    <pre id="yaml"
+                        style="margin:0;font:12px ui-monospace,monospace;color:var(--acc);white-space:pre-wrap;word-break:break-all;min-height:20px"></pre>
+                </div>
+            </div>
+
+            <script>
+                "use strict";
+                const $ = id => document.getElementById(id);
+                const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+                const fmtHz = f => f >= 10000 ? Math.round(f / 1000) + " kHz" : (f >= 1000 ? Math.round(f / 100) / 10 + " kHz" : Math.round(f) + " Hz");
+
+                /* ---------------- constants & params ---------------- */
+                const NFFT = 1024, TARGET_FS = 16000, WINDB = 80;
+                const HZ_MIN = 30, HZ_MAX = 8000;
+                const DEFAULTS = { nlf: -60, minlen: 50, maxlen: 1000, fmin: 200, fmax: 6000, topn: 5 };
+                const P = { ...DEFAULTS };
+                const BPQ_DEFAULT = 10;
+                let bpq = BPQ_DEFAULT;
+                const MINI_H = 36;          // minimap height in px (bottom of canvas)
+                const MIN_ZOOM_DUR = 0.01;  // minimum visible window in seconds (10 ms)
+
+                /* ---------------- state ---------------- */
+                let audioCtx = null, fileBuf = null, fname = "audio";
+                let stft = null, rawImg = null, gatedImg = null;
+                let segments = [], analysisMs = 0, playSrc = null;
+                let segT0 = 0;
+
+                /* zoom / pan state */
+                let viewStart = 0, viewEnd = 0;       // visible time window (seconds)
+                let isPanning = false, panStartX = 0, panStartVS = 0, panStartVE = 0, panMoved = false;
+                let miniDrag = false, miniDragX = 0, miniDragVS = 0, miniDragVE = 0;
+                let fullCanvasGated = null, fullCanvasRaw = null;
+
+                /* ---------------- FFT ---------------- */
+                let rev = null;
+                (function () {
+                    rev = new Uint32Array(NFFT);
+                    const LOG = Math.log2(NFFT);
+                    for (let i = 0; i < NFFT; i++) {
+                        let r = 0;
+                        for (let j = 0; j < LOG; j++) r = (r << 1) | (i >> j) & 1;
+                        rev[i] = r >>> 0;
+                    }
+                })();
+                function fftInPlace(re, im) {
+                    const n = re.length;
+                    for (let i = 0; i < n; i++) {
+                        const j = rev[i];
+                        if (j > i) {
+                            let t = re[i]; re[i] = re[j]; re[j] = t;
+                            t = im[i]; im[i] = im[j]; im[j] = t;
+                        }
+                    }
+                    for (let size = 2; size <= n; size <<= 1) {
+                        const half = size >> 1;
+                        const ang = -2 * Math.PI / size;
+                        const wr0 = Math.cos(ang), wi0 = Math.sin(ang);
+                        for (let i = 0; i < n; i += size) {
+                            let wr = 1, wi = 0;
+                            for (let j = 0; j < half; j++) {
+                                const a = i + j, b = a + half;
+                                const vr = re[b] * wr - im[b] * wi;
+                                const vi = re[b] * wi + im[b] * wr;
+                                re[b] = re[a] - vr; im[b] = im[a] - vi;
+                                re[a] = re[a] + vr; im[a] = im[a] + vi;
+                                const nwr = wr * wr0 - wi * wi0;
+                                wi = wr * wi0 + wi * wr0; wr = nwr;
+                            }
+                        }
+                    }
+                }
+
+                /* ---------------- resampling ---------------- */
+                function toMono(buf) {
+                    const n = buf.length, chs = Math.min(buf.numberOfChannels, 2), out = new Float32Array(n);
+                    for (let c = 0; c < chs; c++) { const ch = buf.getChannelData(c); for (let i = 0; i < n; i++)out[i] += ch[i] / chs; }
+                    return out;
+                }
+                function lowpass(mono, srcFS, dstFS) {
+                    const n = mono.length, fc = Math.min(0.45 * dstFS, 0.4 * srcFS) / srcFS;
+                    const half = 65, len = half * 2 + 1, filt = new Float32Array(len);
+                    let sum = 0;
+                    for (let i = 0; i < len; i++) {
+                        const m = i - half;
+                        let v = m === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * m) / (Math.PI * m);
+                        const w = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / (len - 1));
+                        filt[i] = v * w; sum += filt[i];
+                    }
+                    for (let i = 0; i < len; i++) filt[i] /= sum;
+                    const out = new Float32Array(n);
+                    for (let i = 0; i < n; i++) {
+                        let s = 0; const start = Math.max(0, i - half), end = Math.min(n - 1, i + half);
+                        for (let k = start; k <= end; k++) s += mono[k] * filt[k - i + half];
+                        out[i] = s;
+                    }
+                    return out;
+                }
+                function resampleToTarget(mono, srcFS, dstFS) {
+                    if (srcFS === dstFS) return mono;
+                    const lp = lowpass(mono, srcFS, dstFS);
+                    const n = lp.length, ratio = dstFS / srcFS;
+                    const len = Math.max(1, Math.round(n * ratio));
+                    const out = new Float32Array(len), step = srcFS / dstFS;
+                    for (let i = 0; i < len; i++) {
+                        const pos = i * step, i0 = pos | 0, f = pos - i0, i1 = Math.min(n - 1, i0 + 1);
+                        out[i] = lp[i0] * (1 - f) + lp[i1] * f;
+                    }
+                    return out;
+                }
+
+                /* ---------------- STFT ---------------- */
+                function buildSTFT(mono16, fs) {
+                    const n = mono16.length, hop = NFFT / 2, half = NFFT / 2;
+                    const ncol = Math.max(1, Math.ceil((n - NFFT) / hop) + 1);
+                    const win = new Float32Array(NFFT);
+                    for (let i = 0; i < NFFT; i++) win[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / NFFT));
+                    const re = new Float32Array(NFFT), im = new Float32Array(NFFT);
+                    const frames = new Array(ncol), scale = 2 / NFFT;
+                    for (let f = 0; f < ncol; f++) {
+                        re.fill(0);
+                        im.fill(0);
+                        const off = f * hop;
+                        for (let i = 0; i < NFFT; i++) re[i] = win[i] * (off + i < n ? mono16[off + i] : 0);
+                        fftInPlace(re, im);
+                        const mag = new Float32Array(half);
+                        for (let k = 0; k < half; k++) mag[k] = Math.hypot(re[k], im[k]) * scale;
+                        frames[f] = mag;
+                    }
+                    return { frames, ncol, fs, T: hop / fs, db: fs / NFFT, dur: n / fs, mono: mono16 };
+                }
+
+                /* ---------------- spectrogram images ---------------- */
+                function dbColorLUT() {
+                    const stops = [[16, 17, 31], [19, 52, 94], [16, 116, 140], [13, 206, 196], [247, 223, 84], [255, 255, 255]];
+                    const lut = new Uint8ClampedArray(256 * 3);
+                    for (let i = 0; i < 256; i++) {
+                        const t = (i / 255) * (stops.length - 1), s = Math.min(stops.length - 2, Math.floor(t)), f = t - s;
+                        for (let c = 0; c < 3; c++) lut[i * 3 + c] = stops[s][c] + (stops[s + 1][c] - stops[s][c]) * f;
+                    }
+                    return lut;
+                }
+                const LUT = dbColorLUT();
+                function makeSpectroImage(w, h, gated) {
+                    const img = new ImageData(w, h), data = img.data, S = stft, bins = NFFT / 2;
+                    const top = Math.log(HZ_MIN), lspan = Math.log(HZ_MAX) - top;
+                    const nlf = gated ? P.nlf : 0;
+                    const b0 = gated ? clamp(Math.round(P.fmin / S.db), 0, bins - 1) : 0;
+                    const b1 = gated ? clamp(Math.round(P.fmax / S.db), 0, bins - 1) : bins - 1;
+                    const hz = new Float32Array(h), kRow = new Int32Array(h), outRow = new Uint8Array(h);
+                    for (let y = 0; y < h; y++) {
+                        const hz0 = Math.exp(top + (y + 0.5) / h * lspan);
+                        const k = clamp(Math.round((hz0 - S.db) / S.db), 0, bins - 1);
+                        hz[y] = hz0; kRow[y] = k;
+                        outRow[y] = gated && (k < b0 || k > b1) ? 1 : 0;
+                    }
+                    const lo = gated ? nlf - 6 : -80;
+                    const span = (0 - lo) || 1;
+                    for (let y = 0; y < h; y++) {
+                        const k = kRow[y], out = outRow[y];
+                        const rowOff = y * w * 4;
+                        for (let x = 0; x < w; x++) {
+                            const f = Math.min(S.ncol - 1, (x + 0.5) / w * S.ncol);
+                            const i0 = f | 0, i1 = Math.min(S.ncol - 1, i0 + 1), fr = f - i0;
+                            const m = S.frames[i0][k] * (1 - fr) + S.frames[i1][k] * fr;
+                            const dbm = 10 * Math.log10(m * m + 1e-30);
+                            let c;
+                            if (gated && out) c = 0;
+                            else c = clamp((dbm - lo) / span * 255, 0, 255) | 0;
+                            const p = rowOff + x * 4;
+                            data[p] = LUT[c * 3]; data[p + 1] = LUT[c * 3 + 1]; data[p + 2] = LUT[c * 3 + 2]; data[p + 3] = 255;
+                        }
+                    }
+                    return img;
+                }
+
+                /* cache full-size spectrogram on offscreen canvases so we can crop cheaply */
+                function cacheFullImages() {
+                    if (!stft) return;
+                    const W = $("cv").width, H = $("cv").height;
+                    if (!fullCanvasRaw || fullCanvasRaw.width !== W || fullCanvasRaw.height !== H) {
+                        fullCanvasRaw = document.createElement("canvas");
+                        fullCanvasRaw.width = W; fullCanvasRaw.height = H;
+                        fullCanvasGated = document.createElement("canvas");
+                        fullCanvasGated.width = W; fullCanvasGated.height = H;
+                    }
+                    fullCanvasRaw.getContext("2d").putImageData(rawImg, 0, 0);
+                    fullCanvasGated.getContext("2d").putImageData(gatedImg, 0, 0);
+                }
+
+                /* ---------------- view helpers ---------------- */
+                function resetView() {
+                    if (!stft) return;
+                    viewStart = 0; viewEnd = stft.dur;
+                }
+                function clampView() {
+                    if (!stft) return;
+                    let dur = viewEnd - viewStart;
+                    if (dur < MIN_ZOOM_DUR) dur = MIN_ZOOM_DUR;
+                    if (dur > stft.dur) dur = stft.dur;
+                    if (viewStart < 0) viewStart = 0;
+                    if (viewStart + dur > stft.dur) viewStart = stft.dur - dur;
+                    viewEnd = viewStart + dur;
+                }
+                function canvasTime(clientX) {
+                    const cv = $("cv"), rect = cv.getBoundingClientRect();
+                    const x = (clientX - rect.left) * (cv.width / rect.width);
+                    return viewStart + x / cv.width * (viewEnd - viewStart);
+                }
+                function timeToX(t) { return (t - viewStart) / (viewEnd - viewStart) * $("cv").width; }
+
+                /* ---------------- detection ---------------- */
+                function findPeaks(c0, c1, b0, b1) {
+                    const bins = NFFT / 2, mean = new Float32Array(bins);
+                    for (let c = c0; c <= c1; c++) { const fr = stft.frames[c]; for (let k = b0; k <= b1; k++)mean[k] += fr[k]; }
+                    const cspan = c1 - c0 + 1, cand = [];
+                    for (let k = b0 + 1; k < b1; k++) {
+                        const a = mean[k];
+                        if (a <= mean[k - 1] || a < mean[k + 1]) continue;
+                        const vL = mean[k - 1] * mean[k - 1], vC = a * a, vR = mean[k + 1] * mean[k + 1];
+                        const d = vL + vR - 2 * vC; let rel = 0;
+                        if (Math.abs(d) > 1e-12) rel = clamp(0.5 * (vL - vR) / d, -0.9, 0.9);
+                        cand.push({ k: k + rel, db: 10 * Math.log10(vC + 1e-30) / cspan });
+                    }
+                    cand.sort((a, b) => b.db - a.db);
+                    const chosen = [];
+                    for (const cc of cand) { if (chosen.every(s => Math.abs(s.k - cc.k) >= 2)) chosen.push(cc); if (chosen.length >= P.topn) break; }
+                    const peaks = chosen.map(cc => ({
+                        f: Math.round((cc.k + 0.5) * stft.db / 5) * 5,
+                        db: Math.round(clamp(cc.db, -WINDB, 0) * 10) / 10
+                    }));
+                    let maxLin = 0;
+                    for (let c = c0; c <= c1; c++) { const fr = stft.frames[c]; for (let k = b0; k <= b1; k++) { const m = fr[k]; if (m > maxLin) maxLin = m; } }
+                    return { peaks, peakDb: 10 * Math.log10(maxLin * maxLin + 1e-30) };
+                }
+                function analyze() {
+                    const t0 = performance.now(), S = stft, bins = NFFT / 2;
+                    const b0 = clamp(Math.round(P.fmin / S.db), 0, bins - 1);
+                    const b1 = clamp(Math.round(P.fmax / S.db), 0, bins - 1);
+                    const active = new Uint8Array(S.ncol);
+                    for (let f = 0; f < S.ncol; f++) {
+                        const fr = S.frames[f];
+                        for (let k = b0; k <= b1; k++) { if (10 * Math.log10(fr[k] * fr[k] + 1e-30) >= P.nlf) { active[f] = 1; break; } }
+                    }
+                    const minDur = P.minlen / 1000;
+                    const MIN_DIP_FRAMES = 1;
+                    const edge = new Uint8Array(active);
+                    {
+                        let f = 0;
+                        while (f < active.length) {
+                            if (!active[f]) {
+                                let g = f; while (g < active.length && !active[g]) g++;
+                                if (g - f < MIN_DIP_FRAMES) { for (let x = f; x < g; x++) edge[x] = 1; }
+                                f = g;
+                            } else f++;
+                        }
+                    }
+                    const segs = [];
+                    let s = -1;
+                    for (let f = 0; f <= S.ncol; f++) {
+                        const on = f < S.ncol && edge[f];
+                        if (on && s < 0) s = f;
+                        else if (!on && s >= 0) { if ((f - s) * S.T >= minDur) segs.push({ c0: s, c1: f - 1 }); s = -1; }
+                    }
+                    const kept = segs;
+                    const maxDur = P.maxlen / 1000;
+                    const maxFrames = Math.max(1, Math.round(maxDur / S.T));
+                    const split = [];
+                    for (const seg of kept) {
+                        const total = seg.c1 - seg.c0 + 1;
+                        if (total <= maxFrames) { split.push(seg); }
+                        else {
+                            for (let i = seg.c0; i <= seg.c1; i += maxFrames) {
+                                const end = Math.min(i + maxFrames - 1, seg.c1);
+                                split.push({ c0: i, c1: end });
+                            }
+                        }
+                    }
+                    segments = split.map(x => {
+                        const r = findPeaks(x.c0, x.c1, b0, b1);
+                        return {
+                            start: x.c0 * S.T, durMs: (x.c1 - x.c0 + 1) * S.T * 1000,
+                            c0: x.c0, c1: x.c1,
+                            peaks: r.peaks.map(p => ({ ...p, selected: true })),
+                            peakDb: r.peakDb, selected: true
+                        };
+                    });
+                    segT0 = segments.length ? segments[0].start : 0;
+                    gatedImg = makeSpectroImage($("cv").width, $("cv").height, true);
+                    cacheFullImages();
+                    analysisMs = performance.now() - t0;
+                    renderTable();
+                    render();
+                }
+
+                /* ---------------- rendering ---------------- */
+                function render() {
+                    const cv = $("cv"), ctx = cv.getContext("2d");
+                    if (!stft) return;
+                    const W = cv.width, H = cv.height;
+                    const S = stft;
+                    const useGated = !$("chkRaw").checked;
+                    const srcCanvas = useGated ? fullCanvasGated : fullCanvasRaw;
+                    if (!srcCanvas) return;
+
+                    const plotH = H - MINI_H; // main plot area (above minimap)
+
+                    /* --- draw visible spectrogram slice --- */
+                    const t0px = viewStart / S.dur * W;
+                    const t1px = viewEnd / S.dur * W;
+                    ctx.fillStyle = "#0a0d11";
+                    ctx.fillRect(0, 0, W, H);
+                    ctx.drawImage(srcCanvas, t0px, 0, t1px - t0px, plotH, 0, 0, W, plotH);
+
+                    /* --- frequency grid --- */
+                    const top = Math.log(HZ_MIN), lspan = Math.log(HZ_MAX) - top;
+                    const yF = hz => (Math.log(hz) - top) / lspan * plotH;
+                    ctx.font = "11px ui-monospace,monospace";
+                    for (const f of [100, 200, 500, 1000, 2000, 5000]) {
+                        if (f < HZ_MIN || f > HZ_MAX) continue;
+                        const y = yF(f);
+                        if (y < 0 || y > plotH) continue;
+                        ctx.globalAlpha = .18; ctx.strokeStyle = "#fff"; ctx.setLineDash([2, 4]);
+                        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); ctx.setLineDash([]);
+                        ctx.globalAlpha = 1; ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.fillText(fmtHz(f), 6, y - 3);
+                    }
+
+                    /* --- time grid (adaptive) --- */
+                    const visDur = viewEnd - viewStart;
+                    let step = 1;
+                    const niceSteps = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60];
+                    for (const s of niceSteps) { if (s >= visDur / 12) { step = s; break; } }
+                    const tStart = Math.ceil(viewStart / step) * step;
+                    for (let t = tStart; t <= viewEnd; t += step) {
+                        const x = timeToX(t);
+                        ctx.globalAlpha = .18; ctx.strokeStyle = "#fff"; ctx.setLineDash([2, 4]);
+                        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, plotH); ctx.stroke(); ctx.setLineDash([]);
+                        ctx.globalAlpha = 1; ctx.fillStyle = "rgba(255,255,255,0.5)";
+                        const lbl = step < 0.1 ? t.toFixed(2) : step < 1 ? t.toFixed(1) : t.toFixed(0);
+                        ctx.fillText(lbl + "s", x + 3, plotH - 5);
+                    }
+
+                    /* --- gate shading --- */
+                    ctx.fillStyle = "rgba(255,80,80,0.12)";
+                    if (P.fmin > HZ_MIN) ctx.fillRect(0, 0, W, yF(P.fmin));
+                    if (P.fmax < HZ_MAX) ctx.fillRect(0, yF(P.fmax), W, plotH - yF(P.fmax));
+                    ctx.strokeStyle = "rgba(255,120,120,0.55)"; ctx.setLineDash([6, 4]);
+                    ctx.beginPath(); ctx.moveTo(0, yF(P.fmin)); ctx.lineTo(W, yF(P.fmin)); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0, yF(P.fmax)); ctx.lineTo(W, yF(P.fmax)); ctx.stroke(); ctx.setLineDash([]);
+                    const yn = (P.nlf + WINDB) / WINDB * plotH;
+                    ctx.strokeStyle = "rgba(255,210,80,0.7)"; ctx.setLineDash([4, 4]);
+                    ctx.beginPath(); ctx.moveTo(0, yn); ctx.lineTo(W, yn); ctx.stroke(); ctx.setLineDash([]);
+                    ctx.fillStyle = "rgba(255,210,80,0.8)"; ctx.fillText("noise floor " + P.nlf + " dB", W - 160, yn - 5);
+
+                    /* --- segments (only visible ones) --- */
+                    ctx.lineWidth = 1.5;
+                    segments.forEach((sg, i) => {
+                        const sgEnd = sg.start + sg.durMs / 1000;
+                        if (sgEnd <= viewStart || sg.start >= viewEnd) return; // off-screen
+                        const x0 = timeToX(Math.max(sg.start, viewStart));
+                        const x1 = timeToX(Math.min(sgEnd, viewEnd));
+                        const y0 = yF(P.fmin), y1 = yF(P.fmax);
+                        if (sg.selected) {
+                            ctx.fillStyle = "rgba(0,255,255,0.07)"; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+                            ctx.strokeStyle = "rgba(0,255,255,0.8)"; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+                            ctx.fillStyle = "rgba(120,255,255,0.9)"; ctx.fillText(String(i + 1), x0 + 2, y0 + 12);
+                        } else {
+                            ctx.fillStyle = "rgba(120,120,120,0.05)"; ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+                            ctx.strokeStyle = "rgba(150,150,150,0.5)"; ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+                            ctx.fillStyle = "rgba(150,150,150,0.7)"; ctx.fillText(String(i + 1), x0 + 2, y0 + 12);
+                        }
+                    });
+
+                    /* --- minimap --- */
+                    drawMinimap(ctx, W, H, plotH);
+
+                    /* --- status --- */
+                    const zoomed = (viewEnd - viewStart) < S.dur - 0.001;
+                    const zoomInfo = zoomed ? ` · view ${viewStart.toFixed(2)}–${viewEnd.toFixed(2)} s` : "";
+                    $("status").textContent = `frames ${stft.ncol} · ${stft.fs} Hz · ${segments.length} segment(s) (${segments.filter(s => s.selected).length} selected) · analysis ${analysisMs.toFixed(0)} ms${zoomInfo}`;
+                    renderYaml();
+                }
+
+                function drawMinimap(ctx, W, H, plotH) {
+                    const my = plotH, mh = MINI_H;
+                    ctx.fillStyle = "#0a0d11";
+                    ctx.fillRect(0, my, W, mh);
+                    ctx.strokeStyle = "#262c34";
+                    ctx.strokeRect(0, my, W, mh);
+
+                    // downsampled spectrogram thumbnail
+                    const srcCanvas = $("chkRaw").checked ? fullCanvasRaw : fullCanvasGated;
+                    if (srcCanvas) {
+                        ctx.save();
+                        ctx.globalAlpha = 0.7;
+                        ctx.drawImage(srcCanvas, 0, 0, W, plotH, 0, my, W, mh);
+                        ctx.restore();
+                    }
+
+                    // viewport rectangle
+                    const vx0 = viewStart / stft.dur * W;
+                    const vx1 = viewEnd / stft.dur * W;
+                    ctx.fillStyle = "rgba(0,0,0,0.4)";
+                    ctx.fillRect(0, my, vx0, mh);
+                    ctx.fillRect(vx1, my, W - vx1, mh);
+                    ctx.strokeStyle = "var(--acc)";
+                    ctx.strokeStyle = "#3fd0ff";
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeRect(vx0, my, vx1 - vx0, mh);
+                    ctx.lineWidth = 1;
+                }
+
+                function renderTable() {
+                    const tb = document.querySelector("#tbl tbody"); tb.innerHTML = "";
+                    $("empty").style.display = segments.length ? "none" : "block";
+                    $("empty").textContent = segments.length ? "" : "No segments detected — try lowering the noise floor or min length.";
+                    segments.forEach((sg, i) => {
+                        const tr = document.createElement("tr");
+                        if (!sg.selected) tr.className = "unsel";
+                        const peaksCell = sg.peaks.length
+                            ? sg.peaks.map((p, j) =>
+                                `<span class="pk${p.selected ? "" : " off"}" data-i="${i}" data-j="${j}">${p.f} Hz (${p.db.toFixed(1)} dB)</span>`
+                            ).join(' &nbsp;·&nbsp; ')
+                            : "—";
+                        tr.innerHTML = `<td class="mono"><input type="checkbox" class="sel" ${sg.selected ? "checked" : ""}></td>` +
+                            `<td class="mono">${i + 1}</td><td class="mono">${(sg.start - segT0).toFixed(2)}</td><td class="mono">${sg.durMs.toFixed(0)}</td>` +
+                            `<td class="peaks">${peaksCell}</td><td class="mono peak">${sg.peakDb.toFixed(1)}</td>` +
+                            `<td><button class="play" data-i="${i}">▶</button></td>`;
+                        tr.querySelectorAll(".pk").forEach(el => {
+                            el.onclick = e => {
+                                e.stopPropagation();
+                                const j = +el.dataset.j;
+                                sg.peaks[j].selected = !sg.peaks[j].selected;
+                                el.classList.toggle("off");
+                                renderYaml();
+                            };
+                        });
+                        tr.querySelector(".sel").onchange = e => { sg.selected = e.target.checked; tr.className = sg.selected ? "" : "unsel"; updateChkAll(); render(); };
+                        tr.querySelector(".play").onclick = () => playSegment(sg);
+                        tb.appendChild(tr);
+                    });
+                    updateChkAll();
+                }
+
+                function renderYaml() {
+                    const el = $("yaml");
+                    if (!segments.length) { el.textContent = ""; return; }
+                    const sel = segments.filter(s => s.selected);
+                    if (!sel.length) { el.textContent = "# no segments selected"; return; }
+                    const anchor = sel[0].start;
+                    const lines = [];
+                    for (const sg of sel) {
+                        const freqs = sg.peaks.filter(p => p.selected).map(p => p.f);
+                        if (!freqs.length) continue;
+                        const ts = (sg.start - anchor).toFixed(1);
+                        lines.push(`- chord: [${freqs.join(", ")}]\n  time: ${ts}`);
+                    }
+                    el.textContent = lines.length ? lines.join("\n") : "# all peaks deselected";
+                }
+
+                function updateChkAll() {
+                    const all = $("chkAll");
+                    all.checked = segments.length > 0 && segments.every(s => s.selected);
+                    all.indeterminate = segments.some(s => s.selected) && !all.checked;
+                }
+
+                function exportCSV() {
+                    const sel = segments.filter(s => s.selected);
+                    const N = P.topn, hdr = ["segment", "start_s", "dur_ms"];
+                    for (let i = 1; i <= N; i++) hdr.push(`freq_${i}_hz`, `level_${i}_db`);
+                    hdr.push("peak_db");
+                    const rows = [hdr];
+                    sel.forEach((sg, i) => {
+                        const r = [i + 1, (sg.start - segT0).toFixed(2), sg.durMs.toFixed(0)];
+                        for (let k = 0; k < N; k++) { if (sg.peaks[k]) r.push(sg.peaks[k].f, sg.peaks[k].db.toFixed(1)); else r.push("", ""); }
+                        r.push(sg.peakDb.toFixed(1));
+                        rows.push(r);
+                    });
+                    const a = document.createElement("a");
+                    a.href = URL.createObjectURL(new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv" }));
+                    a.download = fname.replace(/\.[^.]+$/, "") + "_beeps.csv"; a.click();
+                    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                }
+
+                /* ---------------- playback ---------------- */
+                function newAudioCtx() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); return audioCtx; }
+                function buildBandpassGraph(ctx, src, freqs) {
+                    const sum = ctx.createGain();
+                    sum.gain.value = 1;
+                    for (const f of freqs) {
+                        const bp = ctx.createBiquadFilter();
+                        bp.type = "bandpass";
+                        bp.frequency.value = f;
+                        bp.Q.value = bpq;
+                        bp.detune.value = 0;
+                        src.connect(bp);
+                        bp.connect(sum);
+                    }
+                    sum.connect(ctx.destination);
+                    return src;
+                }
+                function playSegment(sg) {
+                    stopPlayback();
+                    const ctx = newAudioCtx(); if (ctx.resume) ctx.resume();
+                    const t0 = ctx.currentTime + 0.03;
+                    const startOffset = Math.max(0, sg.start);
+                    const dur = sg.durMs / 1000;
+                    const src = ctx.createBufferSource();
+                    src.buffer = fileBuf; src.connect(ctx.destination);
+                    playSrc = src;
+                    src.start(t0, startOffset);
+                    src.stop(t0 + dur + 0.05);
+                    src.onended = () => { playSrc = null; $("pos").textContent = ""; };
+                    $("pos").textContent = "playing seg " + (segments.indexOf(sg) + 1);
+                }
+                function playSelected() {
+                    stopPlayback();
+                    const sel = segments.filter(s => s.selected);
+                    if (!sel.length) { setMsg("No segments selected."); return; }
+                    setMsg("");
+                    const ctx = newAudioCtx(); if (ctx.resume) ctx.resume();
+                    const base = ctx.currentTime + 0.08;
+                    const anchor = sel[0].start;
+                    const arr = [];
+                    let skipped = 0;
+                    sel.forEach(sg => {
+                        const freqs = sg.peaks.filter(p => p.selected).map(p => p.f);
+                        if (!freqs.length) { skipped++; return; }
+                        const src = ctx.createBufferSource();
+                        src.buffer = fileBuf;
+                        buildBandpassGraph(ctx, src, freqs);
+                        const when = base + (sg.start - anchor);
+                        src.start(when, Math.max(0, sg.start));
+                        src.stop(when + sg.durMs / 1000 + 0.05);
+                        arr.push(src);
+                    });
+                    playSrc = arr;
+                    const total = (sel[sel.length - 1].start - anchor) + sel[sel.length - 1].durMs / 1000;
+                    $("pos").textContent = "playing " + sel.length + " selected · bandpass Q" + bpq + (skipped ? ` · ${skipped} skipped` : "");
+                    setTimeout(() => { if (playSrc === arr) { playSrc = null; $("pos").textContent = ""; } }, (total + 0.15) * 1000);
+                }
+                function playWhole() {
+                    stopPlayback();
+                    const ctx = newAudioCtx(); if (ctx.resume) ctx.resume();
+                    const src = ctx.createBufferSource();
+                    src.buffer = fileBuf; src.connect(ctx.destination);
+                    playSrc = src; src.start();
+                    src.onended = () => { playSrc = null; $("pos").textContent = ""; };
+                }
+                function stopPlayback() {
+                    const list = Array.isArray(playSrc) ? playSrc : (playSrc ? [playSrc] : []);
+                    list.forEach(s => { try { s.onended = null; s.stop(); } catch (e) { } });
+                    playSrc = null; $("pos").textContent = "";
+                }
+
+                /* ---------------- pipeline ---------------- */
+                function sizeCanvas() { const cv = $("cv"); cv.width = cv.clientWidth; cv.height = cv.clientHeight; }
+                function runPipeline() {
+                    sizeCanvas();
+                    const mono = toMono(fileBuf);
+                    const mono16 = resampleToTarget(mono, fileBuf.sampleRate, TARGET_FS);
+                    stft = buildSTFT(mono16, TARGET_FS);
+                    rawImg = makeSpectroImage($("cv").width, $("cv").height, false);
+                    gatedImg = makeSpectroImage($("cv").width, $("cv").height, true);
+                    cacheFullImages();
+                    resetView();
+                    $("meta").textContent = `${fname} · ${fileBuf.duration.toFixed(2)} s · ${fileBuf.sampleRate} Hz src → ${TARGET_FS} Hz · ${fileBuf.numberOfChannels} ch`;
+                    $("btnPlay").disabled = false;
+                    setMsg("");
+                    analyze();
+                }
+
+                /* ---------------- load / decode ---------------- */
+                function setMsg(s) { $("msg").textContent = s || ""; }
+                function onFile(f) {
+                    if (!f) return;
+                    setMsg("Decoding & resampling…");
+                    const reader = new FileReader();
+                    reader.onerror = () => setMsg("Could not read file: " + reader.error.message);
+                    reader.onload = async () => {
+                        try {
+                            const ctx = newAudioCtx();
+                            fileBuf = await ctx.decodeAudioData(reader.result.slice(0));
+                        } catch (e) { setMsg("Decode failed — unsupported or corrupt format: " + e.message); fileBuf = null; return; }
+                        fname = f.name; stopPlayback();
+                        setTimeout(runPipeline, 0);
+                    };
+                    reader.readAsArrayBuffer(f);
+                }
+
+                /* ---------------- controls ---------------- */
+                const PARAMS = [
+                    { key: "nlf", r: "r_nlf", n: "n_nlf", min: -80, max: -10 },
+                    { key: "minlen", r: "r_minlen", n: "n_minlen", min: 10, max: 500 },
+                    { key: "maxlen", r: "r_maxlen", n: "n_maxlen", min: 100, max: 5000 },
+                    { key: "fmin", r: "r_fmin", n: "n_fmin", min: 50, max: 8000 },
+                    { key: "fmax", r: "r_fmax", n: "n_fmax", min: 500, max: 8000 },
+                    { key: "topn", r: "r_topn", n: "n_topn", min: 1, max: 10 },
+                ];
+                let rafPending = false;
+                function onParamChange() {
+                    if (!stft) return;
+                    if (!rafPending) { rafPending = true; requestAnimationFrame(() => { rafPending = false; analyze(); }); }
+                }
+                PARAMS.forEach(p => {
+                    const r = $(p.r), n = $(p.n);
+                    const apply = v => { v = clamp(+v || DEFAULTS[p.key], p.min, p.max); P[p.key] = v; r.value = v; n.value = v; onParamChange(); };
+                    r.addEventListener("input", () => apply(r.value));
+                    n.addEventListener("change", () => apply(n.value));
+                });
+                $("btnReset").onclick = () => { Object.assign(P, DEFAULTS); PARAMS.forEach(p => { $(p.r).value = P[p.key]; $(p.n).value = P[p.key]; }); bpq = BPQ_DEFAULT; $("r_bpq").value = bpq; $("n_bpq").value = bpq; onParamChange(); };
+                $("btnExport").onclick = exportCSV;
+                $("btnPlaySel").onclick = playSelected;
+                $("chkAll").onchange = e => { segments.forEach(s => s.selected = e.target.checked); renderTable(); render(); };
+                $("chkRaw").onchange = render;
+                $("btnPlay").onclick = () => { if (fileBuf) playWhole(); };
+                $("btnStop").onclick = stopPlayback;
+                $("file").addEventListener("change", e => { onFile(e.target.files[0]); e.target.value = ""; });
+                $("r_bpq").value = bpq; $("n_bpq").value = bpq;
+                $("r_bpq").addEventListener("input", () => { bpq = clamp(+$("r_bpq").value || BPQ_DEFAULT, 1, 30); $("n_bpq").value = bpq; });
+                $("n_bpq").addEventListener("change", () => { bpq = clamp(+$("n_bpq").value || BPQ_DEFAULT, 1, 30); $("r_bpq").value = bpq; });
+
+                /* ---- zoom & pan event handlers ---- */
+
+                /* mouse wheel → zoom */
+                $("cv").addEventListener("wheel", e => {
+                    if (!stft) return;
+                    e.preventDefault();
+                    const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+                    const t = canvasTime(e.clientX);
+                    const newDur = (viewEnd - viewStart) / factor;
+                    const ratio = (t - viewStart) / (viewEnd - viewStart);
+                    viewStart = t - ratio * newDur;
+                    viewEnd = viewStart + newDur;
+                    clampView();
+                    render();
+                }, { passive: false });
+
+                /* mousedown / mousemove / mouseup → pan (with click threshold) */
+                $("cv").addEventListener("mousedown", e => {
+                    if (!stft) return;
+                    const plotH = $("cv").height - MINI_H;
+                    const rect = $("cv").getBoundingClientRect();
+                    const my = (e.clientY - rect.top) * ($("cv").height / rect.height);
+
+                    if (my >= plotH) {
+                        /* clicked in minimap area → jump */
+                        const mx = (e.clientX - rect.left) * ($("cv").width / rect.width);
+                        const dur = viewEnd - viewStart;
+                        const t = (mx / $("cv").width) * stft.dur;
+                        viewStart = clamp(t - dur / 2, 0, Math.max(0, stft.dur - dur));
+                        viewEnd = viewStart + dur;
+                        clampView();
+                        miniDrag = true;
+                        miniDragX = mx;
+                        miniDragVS = viewStart;
+                        miniDragVE = viewEnd;
+                        $("cv").style.cursor = "grabbing";
+                        return;
+                    }
+
+                    /* main plot area */
+                    isPanning = false;
+                    panStartX = e.clientX;
+                    panStartVS = viewStart;
+                    panStartVE = viewEnd;
+                    panMoved = false;
+                    $("cv").style.cursor = "grabbing";
+                });
+
+                window.addEventListener("mousemove", e => {
+                    if (!stft) return;
+                    const cv = $("cv"), rect = cv.getBoundingClientRect();
+                    const plotH = cv.height - MINI_H;
+                    const mx = (e.clientX - rect.left) * (cv.width / rect.width);
+                    const my = (e.clientY - rect.top) * (cv.height / rect.height);
+
+                    if (miniDrag) {
+                        const dx = mx - miniDragX;
+                        const dt = dx / cv.width * stft.dur;
+                        viewStart = miniDragVS + dt;
+                        viewEnd = miniDragVE + dt;
+                        clampView();
+                        render();
+                        return;
+                    }
+
+                    if (!stft || (isPanning || panMoved)) {
+                        if (panStartX !== 0 || isPanning) {
+                            const dx = e.clientX - panStartX;
+                            if (Math.abs(dx) > 3) panMoved = true;
+                            if (panMoved) {
+                                isPanning = true;
+                                const dt = -dx / cv.width * (panStartVE - panStartVS);
+                                viewStart = panStartVS + dt;
+                                viewEnd = panStartVE + dt;
+                                clampView();
+                                render();
+                            }
+                        }
+                        return;
+                    }
+
+                    /* hover readout (not panning) */
+                    if (my < plotH) {
+                        const S = stft, top = Math.log(HZ_MIN), bot = Math.log(HZ_MAX);
+                        const hz = Math.exp(top + my / plotH * (bot - top)), t = viewStart + mx / cv.width * (viewEnd - viewStart);
+                        const f = Math.min(S.ncol - 1, Math.round(t / S.T)), k = clamp(Math.round((hz - S.db) / S.db), 0, NFFT / 2 - 1);
+                        $("readout").textContent = `t = ${t.toFixed(3)} s   f = ${hz.toFixed(1)} Hz   mag = ${(10 * Math.log10(S.frames[f][k] * S.frames[f][k] + 1e-30)).toFixed(1)} dB`;
+                    }
+                });
+
+                window.addEventListener("mouseup", e => {
+                    const wasPanning = isPanning || panMoved;
+                    isPanning = false;
+                    panMoved = false;
+                    miniDrag = false;
+                    $("cv").style.cursor = "crosshair";
+
+                    if (!stft) return;
+
+                    /* if it was a click (not a drag), toggle segment selection */
+                    if (!wasPanning) {
+                        const cv = $("cv"), rect = cv.getBoundingClientRect();
+                        const plotH = cv.height - MINI_H;
+                        const mx = (e.clientX - rect.left) * (cv.width / rect.width);
+                        const my = (e.clientY - rect.top) * (cv.height / rect.height);
+                        if (my < plotH) {
+                            const S = stft;
+                            const t = viewStart + mx / cv.width * (viewEnd - viewStart);
+                            const top = Math.log(HZ_MIN), lspan = Math.log(HZ_MAX) - top;
+                            const hz = Math.exp(top + my / plotH * lspan);
+                            if (hz < P.fmin || hz > P.fmax) return;
+                            for (let i = segments.length - 1; i >= 0; i--) {
+                                const sg = segments[i];
+                                if (t >= sg.start && t < sg.start + sg.durMs / 1000) {
+                                    sg.selected = !sg.selected;
+                                    renderTable();
+                                    render();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                });
+
+                /* double-click → reset view */
+                $("cv").addEventListener("dblclick", e => {
+                    if (!stft) return;
+                    resetView();
+                    render();
+                });
+
+                /* leave canvas → clear readout */
+                $("cv").addEventListener("mouseleave", () => $("readout").textContent = "");
+
+                /* keyboard zoom/pan */
+                document.addEventListener("keydown", e => {
+                    if (!stft) return;
+                    /* don't intercept when typing in inputs */
+                    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+                    const dur = viewEnd - viewStart;
+                    const panStep = dur * 0.15; // 15% of visible window
+                    switch (e.key) {
+                        case "+": case "=":
+                            e.preventDefault();
+                            { const c = (viewStart + viewEnd) / 2; const nd = dur / 1.3; viewStart = c - nd / 2; viewEnd = c + nd / 2; clampView(); render(); }
+                            break;
+                        case "-": case "_":
+                            e.preventDefault();
+                            { const c = (viewStart + viewEnd) / 2; const nd = Math.min(dur * 1.3, stft.dur); viewStart = c - nd / 2; viewEnd = c + nd / 2; clampView(); render(); }
+                            break;
+                        case "ArrowLeft":
+                            e.preventDefault();
+                            viewStart -= panStep; viewEnd -= panStep; clampView(); render();
+                            break;
+                        case "ArrowRight":
+                            e.preventDefault();
+                            viewStart += panStep; viewEnd += panStep; clampView(); render();
+                            break;
+                        case "Home":
+                            e.preventDefault();
+                            viewStart = 0; viewEnd = dur; clampView(); render();
+                            break;
+                        case "End":
+                            e.preventDefault();
+                            viewStart = stft.dur - dur; viewEnd = stft.dur; clampView(); render();
+                            break;
+                        case "0":
+                            e.preventDefault();
+                            resetView(); render();
+                            break;
+                    }
+                });
+            </script>
+        </body>
+
+        </html>
+
+        <script>
+
+        </script>
+    </body>
+
+    </html>
