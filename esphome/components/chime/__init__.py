@@ -29,7 +29,7 @@ CONF_CHORD = "chord"
 CONF_TAIL_GRACE = "tail_grace"
 CONF_SNR_MARGIN_DB = "snr_margin_db"
 CONF_PROMINENCE_DB = "prominence_db"
-CONF_COHERENCE = "coherence"
+CONF_ONSET_CONTRAST_DB = "onset_contrast_db"
 CONF_GUARD_SEPARATION_HZ = "guard_separation_hz"
 CONF_NOISE_FLOOR_ALPHA_DOWN = "noise_floor_alpha_down"
 CONF_NOISE_FLOOR_ALPHA_UP = "noise_floor_alpha_up"
@@ -115,7 +115,9 @@ CHIME_SCHEMA = binary_sensor.binary_sensor_schema().extend(
         cv.Optional(CONF_PROMINENCE_DB, default=6.0): cv.All(
             cv.float_, cv.Range(min=0.0, max=60.0)
         ),
-        cv.Optional(CONF_COHERENCE, default=True): cv.boolean,
+        cv.Optional(CONF_ONSET_CONTRAST_DB, default=8.0): cv.All(
+            cv.float_, cv.Range(min=0.0, max=30.0)
+        ),
         cv.Optional(
             CONF_TAIL_GRACE, default="2s"
         ): cv.positive_time_period_milliseconds,
@@ -206,7 +208,7 @@ async def to_code(config):
         cg.add(var.chime(i).set_threshold_db(chime_cfg[CONF_THRESHOLD]))
         cg.add(var.chime(i).set_snr_margin_db(chime_cfg[CONF_SNR_MARGIN_DB]))
         cg.add(var.chime(i).set_prominence_db(chime_cfg[CONF_PROMINENCE_DB]))
-        cg.add(var.chime(i).set_coherence(chime_cfg[CONF_COHERENCE]))
+        cg.add(var.chime(i).set_onset_contrast_db(chime_cfg[CONF_ONSET_CONTRAST_DB]))
         cg.add(var.chime(i).set_tail_grace_ms(chime_cfg[CONF_TAIL_GRACE]))
 
         detected = await binary_sensor.new_binary_sensor(chime_cfg)
