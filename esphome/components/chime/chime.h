@@ -17,6 +17,15 @@ namespace esphome::chime {
 /// Sentinel value indicating "no time constraint" for a pattern step.
 static constexpr uint32_t NO_TIME = 0xFFFFFFFF;
 
+// ── Phase-coherence tuning (shared by all filters) ──
+/// Number of recent frames averaged for the coherence decision.
+static constexpr uint32_t PHASE_WINDOW_FRAMES = 4;
+/// Minimum number of coherent frames within the window required to pass.
+static constexpr int PHASE_MIN_COHERENT = 3;
+/// Per-frame phase-increment error (rad) still considered coherent. ~40°,
+/// tolerates roughly ±2 Hz of frequency offset.
+static constexpr float PHASE_TOLERANCE_RAD = 0.7f;
+
 // ──────────────────────────────────────────────
 //  Chime – one pattern definition + binary sensor
 // ──────────────────────────────────────────────
@@ -38,6 +47,9 @@ struct Chime {
   /// Minimum dB the target bin must exceed its local spectral background
   /// (guard-band prominence). Flat broadband noise fails this check.
   float prominence_db_{6.0f};
+  /// Enable the phase-coherence gate for this chime. Turn off for chimes where
+  /// you prefer raw short-tone detection over white-noise rejection.
+  bool use_coherence_{true};
   uint32_t tail_grace_ms_{2000};
   /// Derived: max_duration_ms_ + 2000.
   uint32_t release_time_ms_{7000};
@@ -65,14 +77,16 @@ struct Chime {
   void set_threshold_db(float db) { this->threshold_db_ = db; }
   void set_snr_margin_db(float db) { this->snr_margin_db_ = db; }
   void set_prominence_db(float db) { this->prominence_db_ = db; }
+  void set_coherence(bool enabled) { this->use_coherence_ = enabled; }
   void set_tail_grace_ms(uint32_t ms) { this->tail_grace_ms_ = ms; }
   void set_detected_sensor(binary_sensor::BinarySensor *s) { this->detected_sensor_ = s; }
 
-  bool chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg, uint8_t step,
-                      float &peak_db) const;
+  bool chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg, const bool *coherent,
+                      uint8_t step, float &peak_db) const;
   void log_chord_(uint8_t step) const;
 
-  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg);
+  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
+                         const bool *coherent);
   void latch_detection_(uint32_t elapsed_ms);
   void reset_pattern_();
   void reset_all_() {
@@ -125,6 +139,16 @@ class ChimeComponent : public Component {
   /// so the noise floor for that bin is left untouched while the chime sounds.
   bool bin_is_busy_(uint32_t filter_idx) const;
 
+  // ── Phase coherence ──
+  /// Captures the current frame's per-filter phase and updates the rolling
+  /// coherence ring. Must be called once per processed frame while g_v1_/g_v2_
+  /// hold the current Goertzel output.
+  void update_phase_coherence_();
+  /// True if a bin's phasor has been rotating coherently over recent frames.
+  bool bin_is_coherent_(uint32_t filter_idx) const;
+  /// Clears all phase history (called on fresh mic start).
+  void reset_phase_coherence_();
+
   // ── Configuration (shared) ──
   microphone::MicrophoneSource *microphone_source_{nullptr};
   uint16_t window_size_{1024};
@@ -163,6 +187,16 @@ class ChimeComponent : public Component {
 
   // ── Local spectral background for prominence (one entry per global filter) ──
   float *local_bg_db_{nullptr};
+
+  // ── Phase coherence (per-filter; all null when no chime uses coherence) ──
+  bool coherence_active_{false};
+  float *prev_phase_{nullptr};         // last frame's phase, radians
+  float *expected_dphi_{nullptr};      // expected per-frame phase increment, rad
+  float *coherence_err_{nullptr};      // PHASE_WINDOW_FRAMES per filter, ring layout
+  uint8_t *coherence_count_{nullptr};  // frames written since last reset (capped at window)
+  uint8_t *have_prev_phase_{nullptr};  // set once a first phase has been captured
+  bool *coherent_{nullptr};            // per-tick coherence mask (rebuilt in emit_tick_)
+  uint32_t coherence_ring_pos_{0};     // shared write index into each filter's ring
 
   // ── Tick assembly ──
   uint32_t frame_count_{0};
