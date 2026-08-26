@@ -35,6 +35,9 @@ struct Chime {
   /// How far above the local adaptive noise floor a bin must sit to pass (dB).
   /// 6 dB = 2x power, 10 dB = 10x power.
   float snr_margin_db_{8.0f};
+  /// Minimum dB the target bin must exceed its local spectral background
+  /// (guard-band prominence). Flat broadband noise fails this check.
+  float prominence_db_{6.0f};
   uint32_t tail_grace_ms_{2000};
   /// Derived: max_duration_ms_ + 2000.
   uint32_t release_time_ms_{7000};
@@ -61,13 +64,15 @@ struct Chime {
   }
   void set_threshold_db(float db) { this->threshold_db_ = db; }
   void set_snr_margin_db(float db) { this->snr_margin_db_ = db; }
+  void set_prominence_db(float db) { this->prominence_db_ = db; }
   void set_tail_grace_ms(uint32_t ms) { this->tail_grace_ms_ = ms; }
   void set_detected_sensor(binary_sensor::BinarySensor *s) { this->detected_sensor_ = s; }
 
-  bool chord_present_(const float *spectrum_db, const float *noise_floor, uint8_t step, float &peak_db) const;
+  bool chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg, uint8_t step,
+                      float &peak_db) const;
   void log_chord_(uint8_t step) const;
 
-  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor);
+  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg);
   void latch_detection_(uint32_t elapsed_ms);
   void reset_pattern_();
   void reset_all_() {
@@ -94,6 +99,7 @@ class ChimeComponent : public Component {
   void set_tick_interval(uint32_t ms) { this->tick_interval_ms_ = ms; }
   void set_noise_floor_alpha_down(float a) { this->noise_floor_alpha_down_ = a; }
   void set_noise_floor_alpha_up(float a) { this->noise_floor_alpha_up_ = a; }
+  void set_guard_separation_hz(float hz) { this->guard_separation_hz_ = hz; }
 
   uint8_t add_chime() {
     this->chimes_.emplace_back();
@@ -112,6 +118,9 @@ class ChimeComponent : public Component {
   void process_frame_(const int16_t *samples);
   void emit_tick_();
   void build_frequency_map_();
+  /// Recomputes the local spectral background (min dB among bins at least
+  /// guard_separation_hz_ away) for every filter, for prominence checks.
+  void compute_local_background_();
   /// True if any active chime pattern currently occupies this global filter bin,
   /// so the noise floor for that bin is left untouched while the chime sounds.
   bool bin_is_busy_(uint32_t filter_idx) const;
@@ -120,6 +129,9 @@ class ChimeComponent : public Component {
   microphone::MicrophoneSource *microphone_source_{nullptr};
   uint16_t window_size_{1024};
   uint32_t tick_interval_ms_{100};
+  /// Minimum frequency distance (Hz) for a bin to count as "local background"
+  /// when computing prominence. Bins closer than this are excluded.
+  float guard_separation_hz_{150.0f};
 
   // ── Chimes ──
   std::vector<Chime> chimes_;
@@ -148,6 +160,9 @@ class ChimeComponent : public Component {
   bool noise_floor_ready_{false};
   float noise_floor_alpha_down_{0.05f};
   float noise_floor_alpha_up_{0.005f};
+
+  // ── Local spectral background for prominence (one entry per global filter) ──
+  float *local_bg_db_{nullptr};
 
   // ── Tick assembly ──
   uint32_t frame_count_{0};

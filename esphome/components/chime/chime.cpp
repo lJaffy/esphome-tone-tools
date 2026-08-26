@@ -30,9 +30,11 @@ void ChimeComponent::dump_config() {
                 "  Tick Interval: %" PRIu32 " ms\n"
                 "  Chimes: %lu\n"
                 "  Total Goertzel filters: %lu\n"
-                "  Noise Floor: alpha_down=%.3f, alpha_up=%.4f",
+                "  Noise Floor: alpha_down=%.3f, alpha_up=%.4f\n"
+                "  Guard Separation: %.0f Hz",
                 this->window_size_, this->tick_interval_ms_, (unsigned long) this->chimes_.size(),
-                (unsigned long) this->total_filters_, this->noise_floor_alpha_down_, this->noise_floor_alpha_up_);
+                (unsigned long) this->total_filters_, this->noise_floor_alpha_down_, this->noise_floor_alpha_up_,
+                this->guard_separation_hz_);
 
   for (size_t d = 0; d < this->chimes_.size(); ++d) {
     auto &c = this->chimes_[d];
@@ -41,6 +43,7 @@ void ChimeComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", c.max_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB (hard floor)", c.threshold_db_);
     ESP_LOGCONFIG(TAG, "      SNR Margin: %.1f dB", c.snr_margin_db_);
+    ESP_LOGCONFIG(TAG, "      Prominence: %.1f dB (vs local background)", c.prominence_db_);
     ESP_LOGCONFIG(TAG, "      Tail Grace: %" PRIu32 " ms", c.tail_grace_ms_);
     ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", c.release_time_ms_);
     ESP_LOGCONFIG(TAG, "      Pattern (%lu steps):", (unsigned long) c.pattern_chords_.size());
@@ -102,8 +105,9 @@ void ChimeComponent::setup() {
   float *spec = static_cast<float *>(malloc(nf * sizeof(float)));
   float *noise_floor = static_cast<float *>(malloc(nf * sizeof(float)));
   float *noise_floor_init = static_cast<float *>(malloc(nf * sizeof(float)));
+  float *local_bg = static_cast<float *>(malloc(nf * sizeof(float)));
   if (accum == nullptr || v1 == nullptr || v2 == nullptr || c2 == nullptr || spec == nullptr ||
-      noise_floor == nullptr || noise_floor_init == nullptr) {
+      noise_floor == nullptr || noise_floor_init == nullptr || local_bg == nullptr) {
     free(accum);
     free(v1);
     free(v2);
@@ -111,6 +115,7 @@ void ChimeComponent::setup() {
     free(spec);
     free(noise_floor);
     free(noise_floor_init);
+    free(local_bg);
     free(window);
     this->window_ = nullptr;
     ESP_LOGE(TAG, "Failed to allocate Goertzel buffers");
@@ -124,6 +129,7 @@ void ChimeComponent::setup() {
   this->spectrum_db_ = spec;
   this->noise_floor_ = noise_floor;
   this->noise_floor_init_ = noise_floor_init;
+  this->local_bg_db_ = local_bg;
   memset(accum, 0, nf * sizeof(float));
   this->noise_floor_ready_ = false;
 
@@ -340,6 +346,9 @@ void ChimeComponent::emit_tick_() {
       const float p = this->accum_[t];
       this->spectrum_db_[t] = (p > 0.0f) ? 10.0f * log10f(p / ref) : -300.0f;
     }
+
+    // ── Local spectral background for prominence ──
+    this->compute_local_background_();
   }
 
   // ── Update noise floor ──
@@ -374,12 +383,37 @@ void ChimeComponent::emit_tick_() {
 
   const float *eval_floor = floor_was_ready ? this->noise_floor_ : nullptr;
   for (auto &c : this->chimes_) {
-    c.evaluate_pattern_(this->spectrum_db_, eval_floor);
+    c.evaluate_pattern_(this->spectrum_db_, eval_floor, this->local_bg_db_);
   }
 
   memset(this->accum_, 0, this->total_filters_ * sizeof(float));
   this->frame_count_ = 0;
   this->tick_sample_count_ = 0;
+}
+
+// ──────────────────────────────────────────────
+//  Local spectral background (prominence)
+// ──────────────────────────────────────────────
+
+void ChimeComponent::compute_local_background_() {
+  const uint32_t nf = this->total_filters_;
+  for (uint32_t i = 0; i < nf; ++i) {
+    float min_db = 300.0f;
+    for (uint32_t j = 0; j < nf; ++j) {
+      if (i == j)
+        continue;
+      if (std::fabs(this->global_freqs_[i] - this->global_freqs_[j]) < this->guard_separation_hz_)
+        continue;  // too close to be a valid background bin
+      if (this->spectrum_db_[j] < min_db)
+        min_db = this->spectrum_db_[j];
+    }
+    // If no bins qualified (very small / tightly-packed filter set), fall
+    // back to the global minimum across the whole spectrum.
+    if (min_db > 299.0f) {
+      min_db = *std::min_element(this->spectrum_db_, this->spectrum_db_ + nf);
+    }
+    this->local_bg_db_[i] = min_db;
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -406,7 +440,8 @@ bool ChimeComponent::bin_is_busy_(uint32_t filter_idx) const {
 //  Per-chime chord detection
 // ──────────────────────────────────────────────
 
-bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, uint8_t step, float &peak_db) const {
+bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg, uint8_t step,
+                           float &peak_db) const {
   const auto &indices = this->chord_filter_indices_[step];
   peak_db = -300.0f;
 
@@ -414,8 +449,8 @@ bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, u
     const uint32_t idx = indices[i];
     const float db = spectrum_db[idx];
 
-    // Effective threshold: the fixed hard floor, raised by the adaptive
-    // local noise floor + SNR margin when the noise floor is available.
+    // 1) Effective threshold: the fixed hard floor, raised by the adaptive
+    //    local noise floor + SNR margin when the noise floor is available.
     float effective = this->threshold_db_;
     if (noise_floor != nullptr) {
       const float adaptive = noise_floor[idx] + this->snr_margin_db_;
@@ -427,6 +462,14 @@ bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, u
     if (db < effective) {
       return false;
     }
+
+    // 2) Prominence: must sit at least prominence_db_ above the local spectral
+    //    background (the minimum of nearby-in-fresh bins away from this one).
+    //    Flat broadband noise fails this because it is not a local peak.
+    if (local_bg != nullptr && (db - local_bg[idx]) < this->prominence_db_) {
+      return false;
+    }
+
     if (db > peak_db)
       peak_db = db;
   }
@@ -451,14 +494,14 @@ void Chime::log_chord_(uint8_t step) const {
 //  Per-chime pattern state machine
 // ──────────────────────────────────────────────
 
-void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor) {
+void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg) {
   const uint32_t num_steps = static_cast<uint32_t>(this->pattern_chords_.size());
   const uint32_t elapsed = millis() - this->pattern_start_ms_;
 
   // ── IDLE – waiting for first chord ──
   if (!this->pattern_active_) {
     float peak = -300.0f;
-    if (this->chord_present_(spectrum_db, noise_floor, 0, peak)) {
+    if (this->chord_present_(spectrum_db, noise_floor, local_bg, 0, peak)) {
       this->pattern_active_ = true;
       this->match_index_ = 1;
       this->pattern_start_ms_ = millis();
@@ -499,7 +542,7 @@ void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor
       this->need_falling_edge_ = false;
     } else {
       float prev_peak = -300.0f;
-      if (this->chord_present_(spectrum_db, noise_floor, prev_idx, prev_peak)) {
+      if (this->chord_present_(spectrum_db, noise_floor, local_bg, prev_idx, prev_peak)) {
         return;  // still waiting
       }
       this->need_falling_edge_ = false;
@@ -550,7 +593,7 @@ void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor
 
   // Check chord presence
   float peak = -300.0f;
-  if (this->chord_present_(spectrum_db, noise_floor, chord_idx, peak)) {
+  if (this->chord_present_(spectrum_db, noise_floor, local_bg, chord_idx, peak)) {
     if (t_chord != NO_TIME) {
       ESP_LOGD(TAG, "Chord %lu/%lu matched at t=%" PRIu32 " ms (from %" PRIu32 "), peak %.1f dB",
                (unsigned long) (chord_idx + 1), (unsigned long) num_steps, (unsigned) elapsed, (unsigned) t_chord,
