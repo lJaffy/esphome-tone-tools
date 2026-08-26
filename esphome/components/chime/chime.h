@@ -1,4 +1,3 @@
-== > esphome / components / chime / chime.h <= =
 #pragma once
 
 #ifdef USE_ESP32
