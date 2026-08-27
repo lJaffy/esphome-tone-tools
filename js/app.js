@@ -1250,6 +1250,26 @@ function renderSimChart() {
         c2.fillText(c.name.slice(0, 14) + " thr " + c.thresholdDb.toFixed(0), W - 134, y - 3);
         c2.globalAlpha = 1;
     });
+    // matched chime markers — same as spectrogram (green = detected, red dashed = rejected/timeout)
+    if (simResult.events) {
+        for (const ev of simResult.events) {
+            const t = ev.ms / 1000;
+            if (t < t0 || t > t1) continue;
+            const x = X(t);
+            if (ev.type === "detected") {
+                c2.strokeStyle = "#3fd078"; c2.lineWidth = 2; c2.setLineDash([]);
+                c2.beginPath(); c2.moveTo(x, padT); c2.lineTo(x, H - padB); c2.stroke();
+                c2.lineWidth = 1;
+                c2.fillStyle = "#3fd078";
+                c2.font = "11px ui-monospace,monospace";
+                c2.fillText("✓ " + (ev.chimeName || "?"), x + 3, padT + 12);
+            } else if (/discount|timeout/.test(ev.type)) {
+                c2.strokeStyle = "rgba(255,92,92,0.7)"; c2.setLineDash([4, 3]); c2.lineWidth = 1;
+                c2.beginPath(); c2.moveTo(x, padT); c2.lineTo(x, H - padB); c2.stroke();
+                c2.setLineDash([]);
+            }
+        }
+    }
     // selected tick marker
     const sel = ticks[simTickIdx];
     if (sel) {

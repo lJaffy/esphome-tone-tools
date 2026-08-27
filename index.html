@@ -225,14 +225,12 @@
             <div class="callout" style="margin-top:12px">When the segments look right, check the boxes for the ones you want and use <strong>Step 3 → Import selected segments</strong> to load them as a chime pattern.</div>
         </div>
 
-        <!-- Workbench — spectrogram + sim chart + segments -->
+        <!-- Workbench — spectrogram + segments -->
         <div class="panel workbench" id="workbench">
             <div class="step-head"><span class="step-num" style="background:#171b21;color:var(--acc);border:1px solid var(--line)">◎</span><span class="step-title">Spectrogram workbench <small>hover for frequency, scroll to zoom, drag to pan, double-click to reset</small></span></div>
             <canvas id="cv"></canvas>
             <div id="readout"></div>
             <div id="status"></div>
-            <div class="vlab" style="margin-top:12px">Tick-by-tick spectrum, noise floor &amp; thresholds — aligned to the spectrogram</div>
-            <canvas id="simChart" height="300"></canvas>
             <!-- Segments table (still part of Step 2 workbench) -->
             <div class="vlab" style="margin-top:14px;margin-bottom:8px">Detected segments — click on spectrogram or check boxes to select</div>
             <div id="tablewrap">
@@ -267,6 +265,13 @@
                 <button id="btnSimRun" class="primary">run detection</button>
             </div>
             <div id="simChimes"></div>
+        </div>
+
+        <!-- Tick-by-tick spectrum — between Pattern and Simulate -->
+        <div class="panel" id="spectrumChartPanel">
+            <div class="step-head"><span class="step-num" style="background:#171b21;color:var(--acc);border:1px solid var(--line)">◎</span><span class="step-title">Tick-by-tick spectrum <small>noise floor &amp; thresholds — aligned to the spectrogram</small></span></div>
+            <div class="vlab" style="margin-top:4px">Tick-by-tick spectrum, noise floor &amp; thresholds — aligned to the spectrogram (click to inspect tick, markers show detections)</div>
+            <canvas id="simChart" height="300"></canvas>
         </div>
 
         <!-- Step 4 — Simulate -->
