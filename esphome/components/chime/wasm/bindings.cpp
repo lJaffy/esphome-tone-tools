@@ -1,9 +1,9 @@
 // esphome/components/chime/wasm/bindings.cpp — Emscripten embind for chime core.
-// Built with emsdk 3.1.6: emcc ../core/chime_pattern.cpp ../core/chime_engine.cpp bindings.cpp --bind -o chime.js
+// Built with emsdk 3.1.6: emcc ../chime_pattern.cpp ../chime_engine.cpp bindings.cpp --bind -o chime.js
 // Also compiles as plain C++ (no-op) for syntax checking without emcc.
 
-#include "../core/chime_engine.h"
-#include "../core/chime_types.h"
+#include "../chime_engine.h"
+#include "../chime_types.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/bind.h>

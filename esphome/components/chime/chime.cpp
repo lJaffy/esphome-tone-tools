@@ -228,13 +228,13 @@ void ChimeComponent::loop() {
         auto &w = chimes_[idx];
         switch (ev.type) {
           case core::EventType::Detected: w.detected_latched_ = true; w.release_until_ms_ = ev.now_ms + w.release_time_ms_; if (w.detected_sensor_) w.detected_sensor_->publish_state(true); ESP_LOGI(TAG, "CHIME DETECTED in %" PRIu32 " ms (%lu steps)", (unsigned long)ev.elapsed_ms, (unsigned long)ev.num_steps); break;
-          case core::EventType::Released: w.detected_latched_ = false; if (w.detected_sensor_) w.detected_sensor_->publish_state(false); ESP_LOGD(TAG, "Chime[%u] released after %" PRIu32 " ms hold", (unsigned)idx, (unsigned)ev.hold_ms); break;
-          case core::EventType::MaxDurationTimeout: w.pattern_active_ = false; w.match_index_ = 0; w.need_falling_edge_ = false; ESP_LOGD(TAG, "Chime[%u] timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%u)", (unsigned)idx, (unsigned)ev.elapsed_ms, (unsigned)ev.max_ms, (unsigned)ev.matched, (unsigned)ev.num_steps); if (!w.detected_latched_ && w.detected_sensor_) w.detected_sensor_->publish_state(false); break;
+          case core::EventType::Released: w.detected_latched_ = false; if (w.detected_sensor_) w.detected_sensor_->publish_state(false); ESP_LOGD(TAG, "Chime[%u] released after %" PRIu32 " ms hold", (unsigned)idx, (unsigned long)ev.hold_ms); break;
+          case core::EventType::MaxDurationTimeout: w.pattern_active_ = false; w.match_index_ = 0; w.need_falling_edge_ = false; ESP_LOGD(TAG, "Chime[%u] timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%u)", (unsigned)idx, (unsigned long)ev.elapsed_ms, (unsigned long)ev.max_ms, (unsigned)ev.matched, (unsigned)ev.num_steps); if (!w.detected_latched_ && w.detected_sensor_) w.detected_sensor_->publish_state(false); break;
           case core::EventType::PatternStart: ESP_LOGI(TAG, "Chime pattern started: chord 1/%u, peak %.1f dB", (unsigned)ev.num_steps, ev.peak_db); break;
-          case core::EventType::FallingEdge: ESP_LOGD(TAG, "Falling edge after chord %u/%u at t=%" PRIu32 " ms", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned)ev.elapsed_ms); break;
-          case core::EventType::ChordMatch: ESP_LOGD(TAG, "Chord %u/%u matched at t=%" PRIu32 " ms, peak %.1f dB", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned)ev.elapsed_ms, ev.peak_db); break;
-          case core::EventType::MinDurationDiscount: ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms", (unsigned)ev.elapsed_ms, (unsigned)ev.min_ms); break;
-          case core::EventType::StepTimeout: ESP_LOGW(TAG, "Chime timed out: chord %u/%u not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned)ev.t_chord_ms, (unsigned)ev.window_end_ms, (unsigned)ev.elapsed_ms); break;
+          case core::EventType::FallingEdge: ESP_LOGD(TAG, "Falling edge after chord %u/%u at t=%" PRIu32 " ms", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned long)ev.elapsed_ms); break;
+          case core::EventType::ChordMatch: ESP_LOGD(TAG, "Chord %u/%u matched at t=%" PRIu32 " ms, peak %.1f dB", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned long)ev.elapsed_ms, ev.peak_db); break;
+          case core::EventType::MinDurationDiscount: ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms", (unsigned long)ev.elapsed_ms, (unsigned long)ev.min_ms); break;
+          case core::EventType::StepTimeout: ESP_LOGW(TAG, "Chime timed out: chord %u/%u not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned long)ev.t_chord_ms, (unsigned long)ev.window_end_ms, (unsigned long)ev.elapsed_ms); break;
           default: break;
         }
       }

@@ -1,5 +1,5 @@
 #pragma once
-// chime/core/chime_engine.h — pure DSP engine (Goertzel + tick orchestration).
+// chime/chime_engine.h — pure DSP engine (Goertzel + tick orchestration).
 // No ESPHome dependencies. Used by both ESP glue and WASM bindings.
 
 #include "chime_pattern.h"

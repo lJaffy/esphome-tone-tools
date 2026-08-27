@@ -1,5 +1,5 @@
 #pragma once
-// chime/core/chime_types.h — platform-agnostic constants and plain data types.
+// chime/chime_types.h — platform-agnostic constants and plain data types.
 // No ESPHome / Arduino / Emscripten dependencies. Compiles for ESP-IDF and WASM.
 
 #include <cstdint>

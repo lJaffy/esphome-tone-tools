@@ -1,5 +1,5 @@
 #pragma once
-// chime/core/chime_pattern.h — pure pattern state machine, no I/O.
+// chime/chime_pattern.h — pure pattern state machine, no I/O.
 // Port of struct Chime in chime.h:28 / chime.cpp:603-813 with
 // platform side-effects (ESP_LOG, binary_sensor, millis) removed.
 
