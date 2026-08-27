@@ -346,9 +346,10 @@ bool ChimeComponent::start_() {
   const size_t rb_size = (stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS) / bpf) * bpf;
   auto rb = ring_buffer::RingBuffer::create(rb_size);
   if (rb == nullptr) { status_momentary_error("ring_buffer", 15000); return false; }
-  audio_source_ = audio::RingBufferAudioSource::create(rb, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS), (uint8_t)bpf);
+  std::shared_ptr<ring_buffer::RingBuffer> rb_shared(std::move(rb));
+  audio_source_ = audio::RingBufferAudioSource::create(rb_shared, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS), (uint8_t)bpf);
   if (audio_source_ == nullptr) { status_momentary_error("audio_source", 15000); return false; }
-  ring_buffer_ = rb;
+  ring_buffer_ = rb_shared;
   frame_buf_ = static_cast<int16_t *>(malloc((window_size_ + 1) * sizeof(int16_t)));
   if (frame_buf_ == nullptr) { ESP_LOGE(TAG, "Failed to allocate frame buffer"); audio_source_.reset(); ring_buffer_.reset(); status_momentary_error("frame_buf", 15000); return false; }
   frame_buf_offset_ = 0;
