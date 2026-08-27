@@ -11,19 +11,8 @@ RUN apt update \
       git \
       cmake \
       nodejs \
-      python3
-
-# ── Emscripten SDK 3.1.6 for chime WASM (esphome/components/chime/core → wasm/chime.js)
-# Pinned to 3.1.6 per Makefile; installed system-wide so `make -C esphome/components/chime/wasm` works without download.
-ENV EMSDK_VERSION=3.1.6
-ENV EMSDK=/opt/emsdk
-ENV EMSDK_DIR=/opt/emsdk
-RUN git clone https://github.com/emscripten-core/emsdk.git $EMSDK \
-    && $EMSDK/emsdk install $EMSDK_VERSION \
-    && $EMSDK/emsdk activate $EMSDK_VERSION \
-    && rm -rf $EMSDK/upstream/emscripten/cache/*
-# Make emcc available without sourcing emsdk_env.sh
-ENV PATH="$EMSDK:$EMSDK/upstream/emscripten:$PATH"
+      python3 \
+      emscripten
 
 RUN pip install uv
 
