@@ -12,8 +12,8 @@
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 
-#include "core/chime_engine.h"
-#include "core/chime_types.h"
+#include "esphome/components/chime/core/chime_engine.h"
+#include "esphome/components/chime/core/chime_types.h"
 
 namespace esphome::chime {
 
