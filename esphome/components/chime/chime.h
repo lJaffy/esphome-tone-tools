@@ -12,50 +12,38 @@
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 
+#include "core/chime_engine.h"
+#include "core/chime_types.h"
+
 namespace esphome::chime {
 
-/// Sentinel value indicating "no time constraint" for a pattern step.
-static constexpr uint32_t NO_TIME = 0xFFFFFFFF;
-
-// ── Onset-contrast tuning (shared by all filters) ──
-/// Number of past ticks of per-bin history kept for the onset-contrast gate.
-/// 5 ticks × 100 ms = 500 ms of lookback.
-static constexpr uint32_t ONSET_LOOKBACK = 5;
+// Re-export core constants for compat with existing cpp/tests
+static constexpr uint32_t NO_TIME = core::NO_TIME;
+static constexpr uint32_t ONSET_LOOKBACK = core::ONSET_LOOKBACK;
 
 // ──────────────────────────────────────────────
-//  Chime – one pattern definition + binary sensor
+//  Chime – one pattern definition + binary sensor (ESP glue)
+//  Thin wrapper around core::ChimeConfig + binary_sensor.
+//  The actual state machine lives in core::ChimePattern inside ChimeEngine.
 // ──────────────────────────────────────────────
 struct Chime {
-  // ── Config ──
-  /// Each inner vector is one "step" in the sequence (a chord of 1+
-  /// frequencies).
+  // ── Config (mirrors original fields for dump_config / setters) ──
   std::vector<std::vector<float>> pattern_chords_;
-  /// Timestamp for each chord in milliseconds from pattern start.
-  /// NO_TIME (0xFFFFFFFF) means "no time constraint" for that step.
   std::vector<uint32_t> pattern_times_ms_;
   uint32_t min_duration_ms_{2000};
   uint32_t max_duration_ms_{5000};
-  /// Hard lower bound on level (dB). The adaptive noise floor can only raise
-  /// the effective threshold above this value, never below it.
   float threshold_db_{-50.0f};
-  /// How far above the local adaptive noise floor a bin must sit to pass
-  /// (dB). 6 dB = 2x power, 10 dB = 10x power.
   float snr_margin_db_{8.0f};
-  /// Minimum dB the target bin must exceed its local spectral background
-  /// (guard-band prominence). Flat broadband noise fails this check.
   float prominence_db_{6.0f};
-  /// Minimum dB the bin must exceed its own level from the last
-  /// ONSET_LOOKBACK ticks (spectral novelty). 0 disables the onset gate.
   float onset_contrast_db_{8.0f};
   uint32_t tail_grace_ms_{2000};
-  /// Derived: max_duration_ms_ + 2000.
   uint32_t release_time_ms_{7000};
   binary_sensor::BinarySensor *detected_sensor_{nullptr};
 
-  // ── Frequency mapping (populated during setup) ──
+  // For diagnostics / compat: filled from engine after build_frequency_map
   std::vector<std::vector<uint32_t>> chord_filter_indices_;
 
-  // ── State machine ──
+  // State mirrors (read from engine for loop/diagnostics)
   bool pattern_active_{false};
   uint8_t match_index_{0};
   uint32_t pattern_start_ms_{0};
@@ -63,169 +51,123 @@ struct Chime {
   uint32_t release_until_ms_{0};
   bool detected_latched_{false};
 
-  // ── Methods ──
-  void set_pattern(const std::vector<std::vector<float>> &chords) {
-    this->pattern_chords_ = chords;
-  }
-  void set_pattern_times(const std::vector<uint32_t> &times_ms) {
-    this->pattern_times_ms_ = times_ms;
-  }
-  void set_min_duration_ms(uint32_t ms) { this->min_duration_ms_ = ms; }
+  void set_pattern(const std::vector<std::vector<float>> &chords) { pattern_chords_ = chords; }
+  void set_pattern_times(const std::vector<uint32_t> &times_ms) { pattern_times_ms_ = times_ms; }
+  void set_min_duration_ms(uint32_t ms) { min_duration_ms_ = ms; }
   void set_max_duration_ms(uint32_t ms) {
-    this->max_duration_ms_ = ms;
-    this->release_time_ms_ = ms + 2000;
+    max_duration_ms_ = ms;
+    release_time_ms_ = ms + 2000;
   }
-  void set_threshold_db(float db) { this->threshold_db_ = db; }
-  void set_snr_margin_db(float db) { this->snr_margin_db_ = db; }
-  void set_prominence_db(float db) { this->prominence_db_ = db; }
-  void set_onset_contrast_db(float db) { this->onset_contrast_db_ = db; }
-  void set_tail_grace_ms(uint32_t ms) { this->tail_grace_ms_ = ms; }
-  void set_detected_sensor(binary_sensor::BinarySensor *s) {
-    this->detected_sensor_ = s;
-  }
+  void set_threshold_db(float db) { threshold_db_ = db; }
+  void set_snr_margin_db(float db) { snr_margin_db_ = db; }
+  void set_prominence_db(float db) { prominence_db_ = db; }
+  void set_onset_contrast_db(float db) { onset_contrast_db_ = db; }
+  void set_tail_grace_ms(uint32_t ms) { tail_grace_ms_ = ms; }
+  void set_detected_sensor(binary_sensor::BinarySensor *s) { detected_sensor_ = s; }
 
-  bool chord_present_(const float *spectrum_db, const float *noise_floor,
-                      const float *local_bg, const float *onset_contrast,
-                      uint8_t step, float &peak_db) const;
+  // Compat helpers – delegate to engine's pattern via ChimeComponent sync
+  bool chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
+                      const float *onset_contrast, uint8_t step, float &peak_db) const;
   void log_chord_(uint8_t step) const;
-
-  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor,
-                         const float *local_bg, const float *onset_contrast);
+  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
+                         const float *onset_contrast);
   void latch_detection_(uint32_t elapsed_ms);
   void reset_pattern_();
   void reset_all_() {
-    this->pattern_active_ = false;
-    this->match_index_ = 0;
-    this->need_falling_edge_ = false;
+    pattern_active_ = false;
+    match_index_ = 0;
+    need_falling_edge_ = false;
   }
+
+  core::ChimeConfig to_core_config(const std::string &name) const;
+  void sync_from_core(const core::ChimePattern &p);
+  void sync_to_core(core::ChimePattern &p) const;
 };
 
 // ──────────────────────────────────────────────
-//  Component
+//  Component – ESP glue + core::ChimeEngine
 // ──────────────────────────────────────────────
 class ChimeComponent : public Component {
-public:
+ public:
   void dump_config() override;
   void setup() override;
   void loop() override;
 
-  float get_setup_priority() const override {
-    return setup_priority::AFTER_CONNECTION;
-  }
+  float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION; }
 
-  // ── Configuration setters ──
-  void set_microphone_source(microphone::MicrophoneSource *mic) {
-    this->microphone_source_ = mic;
-  }
-  void set_window_size(uint16_t n) { this->window_size_ = n; }
-  void set_tick_interval(uint32_t ms) { this->tick_interval_ms_ = ms; }
-  void set_noise_floor_alpha_down(float a) {
-    this->noise_floor_alpha_down_ = a;
-  }
-  void set_noise_floor_alpha_up(float a) { this->noise_floor_alpha_up_ = a; }
-  void set_guard_separation_hz(float hz) { this->guard_separation_hz_ = hz; }
+  void set_microphone_source(microphone::MicrophoneSource *mic) { microphone_source_ = mic; }
+  void set_window_size(uint16_t n) { window_size_ = n; }
+  void set_tick_interval(uint32_t ms) { tick_interval_ms_ = ms; }
+  void set_noise_floor_alpha_down(float a) { noise_floor_alpha_down_ = a; }
+  void set_noise_floor_alpha_up(float a) { noise_floor_alpha_up_ = a; }
+  void set_guard_separation_hz(float hz) { guard_separation_hz_ = hz; }
 
   uint8_t add_chime() {
-    this->chimes_.emplace_back();
-    return static_cast<uint8_t>(this->chimes_.size() - 1);
+    chimes_.emplace_back();
+    return static_cast<uint8_t>(chimes_.size() - 1);
   }
+  Chime &chime(uint8_t i) { return chimes_[i]; }
 
-  Chime &chime(uint8_t i) { return this->chimes_[i]; }
-
-  // ── Automation actions ──
   void start();
   void stop();
 
-protected:
+ protected:
   bool start_();
   void stop_();
+  void build_frequency_map_();
+  void compute_local_background_();
+  bool bin_is_busy_(uint32_t filter_idx) const;
+  void log_chime_diagnostics_(size_t chime_idx, const Chime &c);
+
+  // Old DSP helpers now delegated to engine (kept for compat if called externally)
   void process_frame_(const int16_t *samples);
   void emit_tick_();
-  void build_frequency_map_();
-  /// Recomputes the local spectral background (min dB among bins at least
-  /// guard_separation_hz_ away) for every filter, for prominence checks.
-  void compute_local_background_();
-  /// True if any active chime pattern currently occupies this global filter
-  /// bin, so the noise floor for that bin is left untouched while the chime
-  /// sounds.
-  bool bin_is_busy_(uint32_t filter_idx) const;
-
-  // ── Debug ──
-  /// DEBUG-only: dump the threshold / prominence / onset-contrast state for
-  /// the step the given chime is currently waiting on.
-  void log_chime_diagnostics_(size_t chime_idx, const Chime &c);
 
   // ── Configuration (shared) ──
   microphone::MicrophoneSource *microphone_source_{nullptr};
   uint16_t window_size_{1024};
   uint32_t tick_interval_ms_{100};
-  /// Minimum frequency distance (Hz) for a bin to count as "local background"
-  /// when computing prominence. Bins closer than this are excluded.
   float guard_separation_hz_{150.0f};
+  float noise_floor_alpha_down_{0.05f};
+  float noise_floor_alpha_up_{0.005f};
 
-  // ── Chimes ──
   std::vector<Chime> chimes_;
 
-  // ── Audio pipeline (shared) ──
+  // ── Audio pipeline ──
   std::unique_ptr<audio::RingBufferAudioSource> audio_source_;
   std::weak_ptr<ring_buffer::RingBuffer> ring_buffer_;
   int16_t *frame_buf_{nullptr};
   uint32_t frame_buf_offset_{0};
 
-  // ── Goertzel DSP state ──
-  float *window_{nullptr};
-  float *accum_{nullptr};
-  float *g_v1_{nullptr};
-  float *g_v2_{nullptr};
-  float *g_c2_{nullptr};
-  float *spectrum_db_{nullptr};
-  std::vector<float> global_freqs_;
-  uint32_t total_filters_{0};
+  // ── Core engine (platform-agnostic DSP) ──
+  core::ChimeEngine engine_;
+  bool engine_built_{false};
+
+  // ── Tick assembly / diagnostics ──
   float sample_rate_hz_{0.0f};
   bool dsp_ready_{false};
-
-  // ── Adaptive noise floor (one entry per global filter) ──
-  float *noise_floor_{nullptr};
-  float *noise_floor_init_{nullptr};
-  bool noise_floor_ready_{false};
-  float noise_floor_alpha_down_{0.05f};
-  float noise_floor_alpha_up_{0.005f};
-
-  // ── Local spectral background for prominence (one entry per global filter)
-  // ──
-  float *local_bg_db_{nullptr};
-
-  // ── Onset contrast (per-filter history + per-tick contrast margin) ──
-  /// Per-bin dB history ring: onset_history_[bin * ONSET_LOOKBACK + slot]
-  /// holds that bin's level from a past tick.
-  float *onset_history_{nullptr};
-  /// Ticks written per bin since last reset (capped at ONSET_LOOKBACK).
-  uint8_t *onset_count_{nullptr};
-  /// Shared write slot into each bin's history ring.
-  uint32_t onset_ring_pos_{0};
-  /// Per-bin contrast margin (current dB - min of history), rebuilt each
-  /// tick in emit_tick_().
-  float *onset_contrast_db_arr_{nullptr};
-
-  // ── Tick assembly ──
-  uint32_t frame_count_{0};
-  uint32_t tick_sample_count_{0};
   uint32_t debug_tick_count_{0};
+  // Compat mirrors for dump_config / diagnostics (proxied from engine)
+  std::vector<float> global_freqs_;
+  uint32_t total_filters_{0};
+  float *window_{nullptr};  // alias to engine window for compat (not owned)
+  float *spectrum_db_{nullptr};
+  float *noise_floor_{nullptr};
+  bool noise_floor_ready_{false};
 };
 
-// ── Automation actions ──
 template <typename... Ts>
 class StartAction : public Action<Ts...>, public Parented<ChimeComponent> {
-public:
+ public:
   void play(const Ts &...x) override { this->parent_->start(); }
 };
 
 template <typename... Ts>
 class StopAction : public Action<Ts...>, public Parented<ChimeComponent> {
-public:
+ public:
   void play(const Ts &...x) override { this->parent_->stop(); }
 };
 
-} // namespace esphome::chime
+}  // namespace esphome::chime
 
 #endif
