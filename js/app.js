@@ -406,11 +406,12 @@ function render() {
     /* --- minimap --- */
     drawMinimap(ctx, W, H, plotH);
 
-    /* --- chime detector markers (when simulated) --- */
+    /* --- chime detector markers (when simulated) — view-relative, moves with zoom/pan --- */
     if (simResult) {
-        const X = t => t / S.dur * W;
         for (const ev of simResult.events) {
-            const x = X(ev.ms / 1000);
+            const t = ev.ms / 1000;
+            if (t < viewStart || t > viewEnd) continue;
+            const x = timeToX(t);
             if (x < 0 || x > W) continue;
             if (ev.type === "detected") {
                 ctx.strokeStyle = "#3fd078"; ctx.lineWidth = 2;
