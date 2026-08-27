@@ -154,7 +154,7 @@ function makeSpectroImage(w, h, gated) {
     const hz = new Float32Array(h), kRow = new Int32Array(h), outRow = new Uint8Array(h);
     for (let y = 0; y < h; y++) {
         const hz0 = Math.exp(top + (y + 0.5) / h * lspan);
-        const k = clamp(Math.round((hz0 - S.db) / S.db), 0, bins - 1);
+        const k = clamp(Math.round(hz0 / S.db), 0, bins - 1);
         hz[y] = hz0; kRow[y] = k;
         outRow[y] = gated && (k < b0 || k > b1) ? 1 : 0;
     }
@@ -181,15 +181,38 @@ function makeSpectroImage(w, h, gated) {
 /* cache full-size spectrogram on offscreen canvases so we can crop cheaply */
 function cacheFullImages() {
     if (!stft) return;
-    const W = $("cv").width, H = $("cv").height;
-    if (!fullCanvasRaw || fullCanvasRaw.width !== W || fullCanvasRaw.height !== H) {
+    const W = $("cv").width, H = $("cv").height, plotH = H - MINI_H;
+    if (!fullCanvasRaw || fullCanvasRaw.width !== W || fullCanvasRaw.height !== plotH) {
         fullCanvasRaw = document.createElement("canvas");
-        fullCanvasRaw.width = W; fullCanvasRaw.height = H;
+        fullCanvasRaw.width = W; fullCanvasRaw.height = plotH;
         fullCanvasGated = document.createElement("canvas");
-        fullCanvasGated.width = W; fullCanvasGated.height = H;
+        fullCanvasGated.width = W; fullCanvasGated.height = plotH;
     }
     fullCanvasRaw.getContext("2d").putImageData(rawImg, 0, 0);
     fullCanvasGated.getContext("2d").putImageData(gatedImg, 0, 0);
+}
+
+/* ---------------- vertical zoom helpers ---------------- */
+function getVisibleLogRange() {
+    const logMin = Math.log(HZ_MIN), logMax = Math.log(HZ_MAX);
+    const fLo = clamp(P.fmin, HZ_MIN, HZ_MAX), fHi = clamp(P.fmax, HZ_MIN, HZ_MAX);
+    let lo = Math.log(Math.min(fLo, fHi)), hi = Math.log(Math.max(fLo, fHi));
+    if (hi <= lo) { hi = lo + Math.log(2); } // degenerate guard
+    const bandSpan = hi - lo;
+    const visibleSpan = bandSpan / 0.8; // band fills ~80% of vertical space
+    const margin = (visibleSpan - bandSpan) / 2;
+    let vLo = lo - margin, vHi = hi + margin;
+    // clamp to absolute limits (keep margin where possible)
+    if (vLo < logMin) vLo = logMin;
+    if (vHi > logMax) vHi = logMax;
+    // if clamped one side, try to keep span where possible, but never exceed full range
+    if (vHi - vLo < visibleSpan) {
+        // not enough room at edges — just show full range
+        if (vLo === logMin && vHi === logMax) { /* full */ }
+        else if (vLo === logMin) { vHi = Math.min(logMax, vLo + visibleSpan); }
+        else if (vHi === logMax) { vLo = Math.max(logMin, vHi - visibleSpan); }
+    }
+    return { vLogMin: vLo, vLogMax: vHi, vSpan: vHi - vLo };
 }
 
 /* ---------------- view helpers ---------------- */
@@ -290,7 +313,7 @@ function analyze() {
         };
     });
     segT0 = segments.length ? segments[0].start : 0;
-    gatedImg = makeSpectroImage($("cv").width, $("cv").height, true);
+    gatedImg = makeSpectroImage($("cv").width, $("cv").height - MINI_H, true);
     cacheFullImages();
     analysisMs = performance.now() - t0;
     renderTable();
@@ -309,16 +332,21 @@ function render() {
 
     const plotH = H - MINI_H; // main plot area (above minimap)
 
-    /* --- draw visible spectrogram slice --- */
+    /* --- vertical zoom: visible freq range from spectral gates, band fills ~80% --- */
+    const { vLogMin, vLogMax, vSpan } = getVisibleLogRange();
+    const fullLogMin = Math.log(HZ_MIN), fullLogMax = Math.log(HZ_MAX), fullSpan = fullLogMax - fullLogMin;
+    const srcY0 = (vLogMin - fullLogMin) / fullSpan * plotH;
+    const srcH = vSpan / fullSpan * plotH;
+    const yF = hz => (Math.log(hz) - vLogMin) / vSpan * plotH;
+
+    /* --- draw visible spectrogram slice (horizontal + vertical crop) --- */
     const t0px = viewStart / S.dur * W;
     const t1px = viewEnd / S.dur * W;
     ctx.fillStyle = "#0a0d11";
     ctx.fillRect(0, 0, W, H);
-    ctx.drawImage(srcCanvas, t0px, 0, t1px - t0px, plotH, 0, 0, W, plotH);
-
-    /* --- frequency grid --- */
-    const top = Math.log(HZ_MIN), lspan = Math.log(HZ_MAX) - top;
-    const yF = hz => (Math.log(hz) - top) / lspan * plotH;
+    // source Y is in the full-range spectrogram image; clamp to canvas
+    const sy = clamp(srcY0, 0, plotH - 1), sh = clamp(srcH, 1, plotH - sy);
+    ctx.drawImage(srcCanvas, t0px, sy, t1px - t0px, sh, 0, 0, W, plotH);
     ctx.font = "11px ui-monospace,monospace";
     for (const f of [100, 200, 500, 1000, 2000, 5000]) {
         if (f < HZ_MIN || f > HZ_MAX) continue;
@@ -471,24 +499,6 @@ function updateChkAll() {
     all.indeterminate = segments.some(s => s.selected) && !all.checked;
 }
 
-function exportCSV() {
-    const sel = segments.filter(s => s.selected);
-    const N = P.topn, hdr = ["segment", "start_s", "dur_ms"];
-    for (let i = 1; i <= N; i++) hdr.push(`freq_${i}_hz`, `level_${i}_db`);
-    hdr.push("peak_db");
-    const rows = [hdr];
-    sel.forEach((sg, i) => {
-        const r = [i + 1, (sg.start - segT0).toFixed(2), sg.durMs.toFixed(0)];
-        for (let k = 0; k < N; k++) { if (sg.peaks[k]) r.push(sg.peaks[k].f, sg.peaks[k].db.toFixed(1)); else r.push("", ""); }
-        r.push(sg.peakDb.toFixed(1));
-        rows.push(r);
-    });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv" }));
-    a.download = fname.replace(/\.[^.]+$/, "") + "_beeps.csv"; a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-}
-
 /* ---------------- playback ---------------- */
 function newAudioCtx() { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); return audioCtx; }
 function buildBandpassGraph(ctx, src, freqs) {
@@ -566,8 +576,9 @@ function rebuildDSP(resetViewFlag) {
     const mono = toMono(fileBuf);
     const mono16 = scaleGain(resampleToTarget(mono, fileBuf.sampleRate, TARGET_FS));
     stft = buildSTFT(mono16, TARGET_FS);
-    rawImg = makeSpectroImage($("cv").width, $("cv").height, false);
-    gatedImg = makeSpectroImage($("cv").width, $("cv").height, true);
+    const plotH = $("cv").height - MINI_H;
+    rawImg = makeSpectroImage($("cv").width, plotH, false);
+    gatedImg = makeSpectroImage($("cv").width, plotH, true);
     cacheFullImages();
     if (resetViewFlag) resetView(); else clampView();
     analyze();
@@ -620,7 +631,6 @@ PARAMS.forEach(p => {
     n.addEventListener("change", () => apply(n.value));
 });
 $("btnReset").onclick = () => { Object.assign(P, DEFAULTS); PARAMS.forEach(p => { $(p.r).value = P[p.key]; $(p.n).value = P[p.key]; }); bpq = BPQ_DEFAULT; $("r_bpq").value = bpq; $("n_bpq").value = bpq; onParamChange(); };
-$("btnExport").onclick = exportCSV;
 $("btnPlaySel").onclick = playSelected;
 $("chkAll").onchange = e => { segments.forEach(s => s.selected = e.target.checked); renderTable(); render(); };
 $("chkRaw").onchange = render;
@@ -723,11 +733,11 @@ window.addEventListener("mousemove", e => {
         return;
     }
 
-    /* hover readout (not panning) */
+    /* hover readout (not panning) — hz uses same log mapping as yF for exact alignment */
     if (my < plotH) {
-        const S = stft, top = Math.log(HZ_MIN), bot = Math.log(HZ_MAX);
-        const hz = Math.exp(top + my / plotH * (bot - top)), t = viewStart + mx / cv.width * (viewEnd - viewStart);
-        const f = Math.min(S.ncol - 1, Math.round(t / S.T)), k = clamp(Math.round((hz - S.db) / S.db), 0, NFFT / 2 - 1);
+        const S = stft, { vLogMin, vSpan } = getVisibleLogRange();
+        const hz = Math.exp(vLogMin + my / plotH * vSpan), t = viewStart + mx / cv.width * (viewEnd - viewStart);
+        const f = Math.min(S.ncol - 1, Math.round(t / S.T)), k = clamp(Math.round(hz / S.db), 0, NFFT / 2 - 1);
         $("readout").textContent = `t = ${t.toFixed(3)} s   f = ${hz.toFixed(1)} Hz   mag = ${(10 * Math.log10(S.frames[f][k] * S.frames[f][k] + 1e-30)).toFixed(1)} dB`;
     }
 });
@@ -750,8 +760,8 @@ window.addEventListener("mouseup", e => {
         if (my < plotH) {
             const S = stft;
             const t = viewStart + mx / cv.width * (viewEnd - viewStart);
-            const top = Math.log(HZ_MIN), lspan = Math.log(HZ_MAX) - top;
-            const hz = Math.exp(top + my / plotH * lspan);
+            const { vLogMin, vSpan } = getVisibleLogRange();
+            const hz = Math.exp(vLogMin + my / plotH * vSpan);
             if (hz < P.fmin || hz > P.fmax) return;
             for (let i = segments.length - 1; i >= 0; i--) {
                 const sg = segments[i];
@@ -1465,7 +1475,7 @@ function buildSimYamlText() {
     const valid = simChimeList.filter(c => c.enabled && c.steps.length && c.steps.every(s => parseFreqs(s.chord).length));
     if (!valid.length) return "";
     const L = [];
-    L.push("# ESPHome `chime` component — exported from Beep Detector");
+    L.push("# ESPHome `chime` component — exported from Chime Detector Simulator");
     L.push("# Each entry under `chimes:` is a binary sensor. Replace `mic1` with your microphone source id.");
     L.push("chime:");
     L.push("  microphone: mic1");
