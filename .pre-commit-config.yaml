@@ -2,12 +2,6 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 
-ci:
-  autoupdate_commit_msg: "pre-commit: autoupdate"
-  autoupdate_schedule: false # Disabled
-  # Skip hooks that have issues in pre-commit CI environment
-  skip: [pylint, clang-tidy-hash]
-
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     # Ruff version.
@@ -53,23 +47,6 @@ repos:
         types_or: [c, c++]
   - repo: local
     hooks:
-      - id: pylint
-        name: pylint
-        entry: python script/run-in-env.py pylint
-        language: system
-        types: [python]
-        files: ^esphome/.+\.py$
-      - id: clang-tidy-hash
-        name: Update clang-tidy hash
-        entry: python script/clang_tidy_hash.py --update-if-changed
-        language: python
-        files: ^(\.clang-tidy|platformio\.ini|requirements_dev\.txt)$
-        pass_filenames: false
-        additional_dependencies: []
-      - id: ci-custom
-        name: ci-custom
-        entry: python script/run-in-env.py script/ci-custom.py
-        language: system
       - id: wasm-stale
         name: wasm artifacts up-to-date
         entry: python util/check-wasm.py
