@@ -887,7 +887,7 @@ function addSimChime(spec) {
         enabled: true,
         name: "chime_" + (simChimeList.length + 1),
         minMs: 2000, maxMs: 8000,
-        thr: -50, snr: 8, prom: 6, onset: 8, tail: 2000,
+        thr: -50, snr: 8, prom: 0, onset: 8, tail: 2000,
         steps: [{ chord: "440", time: "" }, { chord: "660", time: "0.5" }]
     }, spec || {}));
 }
@@ -897,7 +897,7 @@ const SIM_HINTS = {
     maxMs: "Pattern must finish within this time. Sensor release = max + 2 s.",
     thr: "Minimum level a tone must exceed to count as present.",
     snr: "How far above the adaptive noise floor the tone must sit.",
-    prom: "How far the tone must exceed local background (guard band).",
+    prom: "How far the tone must exceed local background (guard band). Uses other bins — ineffective with a single distinct frequency (leave at 0).",
     onset: "How far the tone must exceed its own level 5 ticks earlier (0 = off).",
     tail: "Extra time allowed after a timed step before it is a miss."
 };
@@ -1503,7 +1503,7 @@ function buildSimYamlText() {
         L.push(`        max: ${Math.round(simNum(c.maxMs, 8000))}ms`);
         L.push(`      threshold: ${simNum(c.thr, -50).toFixed(1)}`);
         L.push(`      snr_margin_db: ${simNum(c.snr, 8).toFixed(1)}`);
-        L.push(`      prominence_db: ${simNum(c.prom, 6).toFixed(1)}`);
+        L.push(`      prominence_db: ${simNum(c.prom, 0).toFixed(1)}`);
         L.push(`      onset_contrast_db: ${simNum(c.onset, 8).toFixed(1)}`);
         L.push(`      tail_grace: ${Math.round(simNum(c.tail, 2000))}ms`);
     });

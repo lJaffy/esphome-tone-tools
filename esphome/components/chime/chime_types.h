@@ -1,6 +1,7 @@
 #pragma once
 // chime/chime_types.h — platform-agnostic constants and plain data types.
-// No ESPHome / Arduino / Emscripten dependencies. Compiles for ESP-IDF and WASM.
+// No ESPHome / Arduino / Emscripten dependencies. Compiles for ESP-IDF and
+// WASM.
 
 #include <cstdint>
 #include <string>
@@ -24,7 +25,8 @@ struct DetectorConfig {
 // Per-chime pattern configuration.
 struct ChimeConfig {
   std::string name;
-  // One entry per step; each inner vector is the chord frequencies (Hz) for that step.
+  // One entry per step; each inner vector is the chord frequencies (Hz) for
+  // that step.
   std::vector<std::vector<float>> pattern;
   // One entry per step; NO_TIME == unconstrained timing for that step.
   std::vector<uint32_t> pattern_times_ms;
@@ -32,10 +34,11 @@ struct ChimeConfig {
   uint32_t max_duration_ms = 5000;
   float threshold_db = -50.0f;
   float snr_margin_db = 8.0f;
-  float prominence_db = 6.0f;
+  float prominence_db = 0.0f;
   float onset_contrast_db = 8.0f;
   uint32_t tail_grace_ms = 2000;
-  // Derived, kept in sync with max_duration_ms (max + 2000) like Chime::set_max_duration_ms.
+  // Derived, kept in sync with max_duration_ms (max + 2000) like
+  // Chime::set_max_duration_ms.
   uint32_t release_time_ms = 7000;
 };
 
@@ -126,4 +129,4 @@ struct RunResult {
   std::vector<TickSnapshot> ticks;
 };
 
-}  // namespace esphome::chime::core
+} // namespace esphome::chime::core

@@ -112,7 +112,7 @@ CHIME_SCHEMA = binary_sensor.binary_sensor_schema().extend(
         cv.Optional(CONF_SNR_MARGIN_DB, default=8.0): cv.All(
             cv.positive_float, cv.Range(min=0.0, max=60.0)
         ),
-        cv.Optional(CONF_PROMINENCE_DB, default=6.0): cv.All(
+        cv.Optional(CONF_PROMINENCE_DB, default=0.0): cv.All(
             cv.float_, cv.Range(min=0.0, max=60.0)
         ),
         cv.Optional(CONF_ONSET_CONTRAST_DB, default=8.0): cv.All(

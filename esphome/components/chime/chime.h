@@ -34,7 +34,7 @@ struct Chime {
   uint32_t max_duration_ms_{5000};
   float threshold_db_{-50.0f};
   float snr_margin_db_{8.0f};
-  float prominence_db_{6.0f};
+  float prominence_db_{0.0f};
   float onset_contrast_db_{8.0f};
   uint32_t tail_grace_ms_{2000};
   uint32_t release_time_ms_{7000};
@@ -51,8 +51,12 @@ struct Chime {
   uint32_t release_until_ms_{0};
   bool detected_latched_{false};
 
-  void set_pattern(const std::vector<std::vector<float>> &chords) { pattern_chords_ = chords; }
-  void set_pattern_times(const std::vector<uint32_t> &times_ms) { pattern_times_ms_ = times_ms; }
+  void set_pattern(const std::vector<std::vector<float>> &chords) {
+    pattern_chords_ = chords;
+  }
+  void set_pattern_times(const std::vector<uint32_t> &times_ms) {
+    pattern_times_ms_ = times_ms;
+  }
   void set_min_duration_ms(uint32_t ms) { min_duration_ms_ = ms; }
   void set_max_duration_ms(uint32_t ms) {
     max_duration_ms_ = ms;
@@ -63,14 +67,17 @@ struct Chime {
   void set_prominence_db(float db) { prominence_db_ = db; }
   void set_onset_contrast_db(float db) { onset_contrast_db_ = db; }
   void set_tail_grace_ms(uint32_t ms) { tail_grace_ms_ = ms; }
-  void set_detected_sensor(binary_sensor::BinarySensor *s) { detected_sensor_ = s; }
+  void set_detected_sensor(binary_sensor::BinarySensor *s) {
+    detected_sensor_ = s;
+  }
 
   // Compat helpers – delegate to engine's pattern via ChimeComponent sync
-  bool chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
-                      const float *onset_contrast, uint8_t step, float &peak_db) const;
+  bool chord_present_(const float *spectrum_db, const float *noise_floor,
+                      const float *local_bg, const float *onset_contrast,
+                      uint8_t step, float &peak_db) const;
   void log_chord_(uint8_t step) const;
-  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
-                         const float *onset_contrast);
+  void evaluate_pattern_(const float *spectrum_db, const float *noise_floor,
+                         const float *local_bg, const float *onset_contrast);
   void latch_detection_(uint32_t elapsed_ms);
   void reset_pattern_();
   void reset_all_() {
@@ -88,14 +95,18 @@ struct Chime {
 //  Component – ESP glue + core::ChimeEngine
 // ──────────────────────────────────────────────
 class ChimeComponent : public Component {
- public:
+public:
   void dump_config() override;
   void setup() override;
   void loop() override;
 
-  float get_setup_priority() const override { return setup_priority::AFTER_CONNECTION; }
+  float get_setup_priority() const override {
+    return setup_priority::AFTER_CONNECTION;
+  }
 
-  void set_microphone_source(microphone::MicrophoneSource *mic) { microphone_source_ = mic; }
+  void set_microphone_source(microphone::MicrophoneSource *mic) {
+    microphone_source_ = mic;
+  }
   void set_window_size(uint16_t n) { window_size_ = n; }
   void set_tick_interval(uint32_t ms) { tick_interval_ms_ = ms; }
   void set_noise_floor_alpha_down(float a) { noise_floor_alpha_down_ = a; }
@@ -111,7 +122,7 @@ class ChimeComponent : public Component {
   void start();
   void stop();
 
- protected:
+protected:
   bool start_();
   void stop_();
   void build_frequency_map_();
@@ -119,7 +130,8 @@ class ChimeComponent : public Component {
   bool bin_is_busy_(uint32_t filter_idx) const;
   void log_chime_diagnostics_(size_t chime_idx, const Chime &c);
 
-  // Old DSP helpers now delegated to engine (kept for compat if called externally)
+  // Old DSP helpers now delegated to engine (kept for compat if called
+  // externally)
   void process_frame_(const int16_t *samples);
   void emit_tick_();
 
@@ -150,7 +162,7 @@ class ChimeComponent : public Component {
   // Compat mirrors for dump_config / diagnostics (proxied from engine)
   std::vector<float> global_freqs_;
   uint32_t total_filters_{0};
-  float *window_{nullptr};  // alias to engine window for compat (not owned)
+  float *window_{nullptr}; // alias to engine window for compat (not owned)
   float *spectrum_db_{nullptr};
   float *noise_floor_{nullptr};
   bool noise_floor_ready_{false};
@@ -158,16 +170,16 @@ class ChimeComponent : public Component {
 
 template <typename... Ts>
 class StartAction : public Action<Ts...>, public Parented<ChimeComponent> {
- public:
+public:
   void play(const Ts &...x) override { this->parent_->start(); }
 };
 
 template <typename... Ts>
 class StopAction : public Action<Ts...>, public Parented<ChimeComponent> {
- public:
+public:
   void play(const Ts &...x) override { this->parent_->stop(); }
 };
 
-}  // namespace esphome::chime
+} // namespace esphome::chime
 
 #endif
