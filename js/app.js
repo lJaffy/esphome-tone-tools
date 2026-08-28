@@ -619,12 +619,19 @@ function pcmBytesToAudioBuffer(int16) {
 }
 
 function pcmArrayBufferToAudioBuffer(ab) {
-    // ab: ArrayBuffer of raw 16-bit 16 kHz mono PCM
+    // ab: ArrayBuffer of raw 16-bit 16 kHz mono PCM (S16_LE)
     let bytes = ab.byteLength;
     if (bytes % 2) bytes -= 1; // drop trailing odd byte
     const n = bytes / 2;
-    const view = new Int16Array(ab, 0, n);
-    return pcmBytesToAudioBuffer(view);
+    if (!n) {
+        const ctx = newAudioCtx();
+        return ctx.createBuffer(1, 1, TARGET_FS);
+    }
+    // Use DataView to decode LE explicitly (correct on both LE and BE hosts)
+    const dv = new DataView(ab, 0, bytes);
+    const int16 = new Int16Array(n);
+    for (let i = 0; i < n; i++) int16[i] = dv.getInt16(i * 2, true);
+    return pcmBytesToAudioBuffer(int16);
 }
 
 function onFile(f) {
@@ -765,21 +772,51 @@ async function startMicCapture() {
     }
     micReader = response.body.getReader();
     if (meta) meta.innerHTML = '<span class="dot-rec"></span>0.00 s &middot; capturing…';
+    // For peak we must not drop a sample that straddles two fetch chunks (odd-length chunk)
+    let micCarry = null; // pending low byte from previous odd-length chunk
     try {
         while (true) {
             const { value, done } = await micReader.read();
             if (done) break;
             if (!value || !value.length) continue;
-            // track peak (sample decimated for speed is fine, but full scan is cheap for 16 kHz)
-            // value is Uint8Array of LE int16
-            const n16 = value.length >> 1;
-            const s16 = new Int16Array(value.buffer, value.byteOffset, n16);
+            // track peak using DataView + carry (LE S16) so odd chunk boundaries don't corrupt
             let localPeak = 0;
-            // decimate when chunk is large
-            const step = n16 > 2048 ? 4 : 1;
-            for (let i = 0; i < n16; i += step) {
-                const v = Math.abs(s16[i]) / 32768;
-                if (v > localPeak) localPeak = v;
+            if (micCarry !== null) {
+                // combine carry (low byte of next sample) with first byte of this chunk (high byte)
+                if (value.length >= 1) {
+                    const first = (value[0] << 8) | micCarry;
+                    // sign-extend 16-bit
+                    const s = (first << 16) >> 16;
+                    const v = Math.abs(s) / 32768;
+                    if (v > localPeak) localPeak = v;
+                    // decoded one byte from value; remaining bytes start at offset 1
+                    const rem = value.length - 1;
+                    const n16rem = rem >> 1;
+                    if (n16rem) {
+                        const dv = new DataView(value.buffer, value.byteOffset + 1, n16rem * 2);
+                        const step = n16rem > 2048 ? 4 : 1;
+                        for (let i = 0; i < n16rem; i += step) {
+                            const s2 = dv.getInt16(i * 2, true);
+                            const v2 = Math.abs(s2) / 32768;
+                            if (v2 > localPeak) localPeak = v2;
+                        }
+                    }
+                    micCarry = (rem % 2) ? value[value.length - 1] : null;
+                } else {
+                    // value empty but we still have carry — keep it
+                }
+            } else {
+                const n16 = value.length >> 1;
+                if (n16) {
+                    const dv = new DataView(value.buffer, value.byteOffset, n16 * 2);
+                    const step = n16 > 2048 ? 4 : 1;
+                    for (let i = 0; i < n16; i += step) {
+                        const s = dv.getInt16(i * 2, true);
+                        const v = Math.abs(s) / 32768;
+                        if (v > localPeak) localPeak = v;
+                    }
+                }
+                micCarry = (value.length % 2) ? value[value.length - 1] : null;
             }
             if (localPeak > micPeakLin) micPeakLin = localPeak;
             // store copy (value will be detached after next read on some impls)
@@ -825,7 +862,7 @@ function finalizeMicCapture() {
     resetMicState();
     if (!wasCapturing && !chunks.length) return;
     if (!totalBytes) { setMsg("No audio captured — stream was empty. Check the device microphone."); return; }
-    // drop trailing odd byte
+    // drop trailing odd byte (global, not per-chunk) and decode LE correctly
     let bytes = totalBytes;
     if (bytes % 2) bytes -= 1;
     const samples = bytes / 2;
@@ -833,19 +870,20 @@ function finalizeMicCapture() {
         setMsg("Capture too short (" + (samples / TARGET_FS).toFixed(2) + " s) — hold the chime longer and try again.");
         return;
     }
-    // concat into single Int16Array
-    const out = new Int16Array(samples);
+    // concat raw bytes first, then decode S16_LE with DataView so a sample
+    // straddling two fetch chunks is preserved (old code dropped per-chunk odd byte)
+    const concat = new Uint8Array(bytes);
     let off = 0;
     for (const c of chunks) {
-        const n16 = c.length >> 1;
-        const s16 = new Int16Array(c.buffer, c.byteOffset, n16);
-        const take = Math.min(n16, samples - off);
+        if (off >= bytes) break;
+        const take = Math.min(c.length, bytes - off);
         if (take <= 0) break;
-        out.set(take === n16 ? s16 : s16.subarray(0, take), off);
+        concat.set(c.subarray(0, take), off);
         off += take;
-        if (off >= samples) break;
     }
-    // optional trailing byte already dropped
+    const out = new Int16Array(samples);
+    const dv = new DataView(concat.buffer, concat.byteOffset, bytes);
+    for (let i = 0; i < samples; i++) out[i] = dv.getInt16(i * 2, true);
     try {
         fileBuf = pcmBytesToAudioBuffer(out);
     } catch (e) { setMsg("Failed to build audio buffer: " + e.message); return; }
