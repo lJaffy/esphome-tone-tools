@@ -20,6 +20,15 @@ let segments = [], analysisMs = 0, playSrc = null;
 let segT0 = 0;
 let gainDb = 0; // input gain applied to the loaded recording (emulates mic sensitivity)
 
+/* mic stream capture state */
+let micCapturing = false;
+let micAbortCtl = null;
+let micReader = null;
+let micChunks = [];
+let micBytes = 0;
+let micPeakLin = 0;
+let micMeterTimer = 0;
+
 /* zoom / pan state */
 let viewStart = 0, viewEnd = 0;       // visible time window (seconds)
 let isPanning = false, panStartX = 0, panStartVS = 0, panStartVE = 0, panMoved = false;
@@ -595,8 +604,49 @@ function runPipeline() {
 
 /* ---------------- load / decode ---------------- */
 function setMsg(s) { $("msg").textContent = s || ""; }
+
+function isPcmFile(f) { return f && /\.pcm$/i.test(f.name); }
+
+function pcmBytesToAudioBuffer(int16) {
+    // int16: Int16Array (16 kHz mono, signed LE)
+    const ctx = newAudioCtx();
+    const n = int16.length;
+    if (!n) return ctx.createBuffer(1, 1, TARGET_FS);
+    const buf = ctx.createBuffer(1, n, TARGET_FS);
+    const ch = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) ch[i] = int16[i] / 32768;
+    return buf;
+}
+
+function pcmArrayBufferToAudioBuffer(ab) {
+    // ab: ArrayBuffer of raw 16-bit 16 kHz mono PCM
+    let bytes = ab.byteLength;
+    if (bytes % 2) bytes -= 1; // drop trailing odd byte
+    const n = bytes / 2;
+    const view = new Int16Array(ab, 0, n);
+    return pcmBytesToAudioBuffer(view);
+}
+
 function onFile(f) {
     if (!f) return;
+    if (micCapturing) { setMsg("Stop the mic capture first before loading a file."); return; }
+    // Raw PCM path — no decodeAudioData (assumed 16-bit 16 kHz mono, matching mic_streamer)
+    if (isPcmFile(f)) {
+        setMsg("Loading raw PCM (16-bit 16 kHz mono)…");
+        const reader = new FileReader();
+        reader.onerror = () => setMsg("Could not read file: " + reader.error.message);
+        reader.onload = () => {
+            try {
+                const ab = reader.result;
+                if (!ab || !ab.byteLength) throw new Error("empty file");
+                fileBuf = pcmArrayBufferToAudioBuffer(ab);
+                fname = f.name; stopPlayback();
+                setTimeout(runPipeline, 0);
+            } catch (e) { setMsg("PCM load failed: " + e.message); fileBuf = null; }
+        };
+        reader.readAsArrayBuffer(f);
+        return;
+    }
     setMsg("Decoding & resampling…");
     const reader = new FileReader();
     reader.onerror = () => setMsg("Could not read file: " + reader.error.message);
@@ -609,6 +659,204 @@ function onFile(f) {
         setTimeout(runPipeline, 0);
     };
     reader.readAsArrayBuffer(f);
+}
+
+/* ---------------- mic stream capture ---------------- */
+function setMicUI() {
+    const capturing = micCapturing;
+    const urlInput = $("micUrl"), startBtn = $("btnMicStart"), stopBtn = $("btnMicStop");
+    const fileInput = $("file"), testBtn = $("btnSimTest");
+    if (urlInput) urlInput.disabled = capturing;
+    if (startBtn) startBtn.disabled = capturing;
+    if (stopBtn) stopBtn.disabled = !capturing;
+    if (fileInput) fileInput.disabled = capturing;
+    if (testBtn) testBtn.disabled = capturing;
+}
+
+function resetMicMeter() {
+    const bar = $("micLevel"), wrap = $("micLvWrap"), meta = $("micMeta");
+    if (bar) bar.style.width = "0%";
+    if (wrap) { wrap.classList.remove("warn", "hot"); wrap.title = "Input level"; }
+    if (meta && !micCapturing) meta.textContent = "idle";
+    micPeakLin = 0;
+}
+
+function updateMicMeter() {
+    const bar = $("micLevel"), wrap = $("micLvWrap"), meta = $("micMeta");
+    if (!bar || !meta) return;
+    const peak = micPeakLin;
+    const peakDb = peak > 0 ? (20 * Math.log10(peak)).toFixed(1) : "-inf";
+    const pct = peak > 0 ? clamp(((20 * Math.log10(peak) + 60) / 60) * 100, 0, 100) : 0;
+    bar.style.width = pct.toFixed(1) + "%";
+    if (wrap) {
+        wrap.classList.remove("warn", "hot");
+        if (pct > 92) wrap.classList.add("hot");
+        else if (pct > 75) wrap.classList.add("warn");
+        wrap.title = peakDb + " dBFS peak";
+    }
+    const secs = (micBytes / 2 / TARGET_FS).toFixed(2);
+    if (micCapturing) {
+        meta.innerHTML = '<span class="dot-rec"></span>' + secs + ' s &middot; ' + peakDb + ' dB';
+    }
+}
+
+function resetMicState() {
+    micCapturing = false;
+    micAbortCtl = null;
+    micReader = null;
+    micChunks = [];
+    micBytes = 0;
+    if (micMeterTimer) { clearInterval(micMeterTimer); micMeterTimer = 0; }
+    resetMicMeter();
+    setMicUI();
+}
+
+async function startMicCapture() {
+    if (micCapturing) return;
+    const urlEl = $("micUrl");
+    const rawUrl = urlEl ? urlEl.value.trim() : "";
+    if (!rawUrl) { setMsg("Enter the mic_stream URL — e.g. http://doorbell.local/mic_stream"); if (urlEl) urlEl.focus(); return; }
+    let parsed;
+    try { parsed = new URL(rawUrl); if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("bad protocol"); }
+    catch (e) { setMsg("Mic URL must be http:// or https:// — e.g. http://doorbell.local/mic_stream"); return; }
+    const url = parsed.toString();
+    if (urlEl) { try { localStorage.setItem("mic_stream_url", url); } catch (e) {} }
+
+    setMsg("");
+    micCapturing = true;
+    micChunks = [];
+    micBytes = 0;
+    micPeakLin = 0;
+    micAbortCtl = new AbortController();
+    setMicUI();
+    const meta = $("micMeta");
+    if (meta) meta.innerHTML = '<span class="dot-rec"></span>connecting…';
+    resetMicMeter();
+    // live meter refresh ~12 fps
+    micMeterTimer = setInterval(updateMicMeter, 80);
+
+    let response;
+    try {
+        response = await fetch(url, { signal: micAbortCtl.signal, cache: "no-store", mode: "cors" });
+    } catch (e) {
+        if (e.name === "AbortError") { resetMicState(); return; }
+        setMsg("Fetch failed — check the URL, device power, and that allow_without_auth: true is set. (" + (e.message || e) + ")");
+        resetMicState();
+        return;
+    }
+    if (!response.ok) {
+        let hint = "";
+        if (response.status === 429) hint = "Device is already streaming to another client (429). Stop the other capture and try again.";
+        else if (response.status === 401 || response.status === 403) hint = "Authentication required (" + response.status + ") — set allow_without_auth: true on the mic_streamer.";
+        else hint = "HTTP " + response.status + " " + response.statusText;
+        setMsg("Mic stream request failed: " + hint);
+        resetMicState();
+        return;
+    }
+    const ct = (response.headers.get("content-type") || "").toLowerCase();
+    if (ct && !ct.includes("audio/l16") && !ct.includes("octet-stream") && !ct.includes("application/octet-stream")) {
+        // not fatal — some proxies strip the header; just warn in console
+        console.warn("Unexpected mic_stream content-type:", ct);
+    }
+    if (!response.body || !response.body.getReader) {
+        setMsg("This browser does not support streaming fetch (ReadableStream). Try a recent Chrome/Firefox.");
+        resetMicState();
+        return;
+    }
+    micReader = response.body.getReader();
+    if (meta) meta.innerHTML = '<span class="dot-rec"></span>0.00 s &middot; capturing…';
+    try {
+        while (true) {
+            const { value, done } = await micReader.read();
+            if (done) break;
+            if (!value || !value.length) continue;
+            // track peak (sample decimated for speed is fine, but full scan is cheap for 16 kHz)
+            // value is Uint8Array of LE int16
+            const n16 = value.length >> 1;
+            const s16 = new Int16Array(value.buffer, value.byteOffset, n16);
+            let localPeak = 0;
+            // decimate when chunk is large
+            const step = n16 > 2048 ? 4 : 1;
+            for (let i = 0; i < n16; i += step) {
+                const v = Math.abs(s16[i]) / 32768;
+                if (v > localPeak) localPeak = v;
+            }
+            if (localPeak > micPeakLin) micPeakLin = localPeak;
+            // store copy (value will be detached after next read on some impls)
+            micChunks.push(value.slice(0));
+            micBytes += value.length;
+            // throttle DOM update — timer does it, but also push immediate for first data
+        }
+    } catch (e) {
+        if (e.name === "AbortError") {
+            // user pressed stop — fall through to finalize
+        } else {
+            console.error("mic stream read error", e);
+            setMsg("Stream ended with error: " + (e.message || e));
+            // still finalize what we have
+        }
+    } finally {
+        // if still marked capturing, this was a natural end (device closed at max_duration) or an error — finalize
+        // if user pressed Stop & analyse, stopMicCapture already aborted and will call finalize; avoid double-finalize
+        if (micCapturing) {
+            finalizeMicCapture();
+        }
+    }
+}
+
+function stopMicCapture() {
+    if (!micCapturing) return;
+    // abort fetch; read loop will exit and finalize via its finally block
+    // if fetch already done, just finalize now
+    const ctl = micAbortCtl;
+    if (ctl) { try { ctl.abort(); } catch (e) {} }
+    else { finalizeMicCapture(); }
+    // UI feedback immediately
+    const meta = $("micMeta");
+    if (meta) meta.textContent = "stopping…";
+}
+
+function finalizeMicCapture() {
+    const chunks = micChunks.slice();
+    const totalBytes = micBytes;
+    const peak = micPeakLin;
+    const wasCapturing = micCapturing;
+    // reset state before pipeline (so file input is re-enabled)
+    resetMicState();
+    if (!wasCapturing && !chunks.length) return;
+    if (!totalBytes) { setMsg("No audio captured — stream was empty. Check the device microphone."); return; }
+    // drop trailing odd byte
+    let bytes = totalBytes;
+    if (bytes % 2) bytes -= 1;
+    const samples = bytes / 2;
+    if (samples < TARGET_FS * 0.08) { // < 80 ms
+        setMsg("Capture too short (" + (samples / TARGET_FS).toFixed(2) + " s) — hold the chime longer and try again.");
+        return;
+    }
+    // concat into single Int16Array
+    const out = new Int16Array(samples);
+    let off = 0;
+    for (const c of chunks) {
+        const n16 = c.length >> 1;
+        const s16 = new Int16Array(c.buffer, c.byteOffset, n16);
+        const take = Math.min(n16, samples - off);
+        if (take <= 0) break;
+        out.set(take === n16 ? s16 : s16.subarray(0, take), off);
+        off += take;
+        if (off >= samples) break;
+    }
+    // optional trailing byte already dropped
+    try {
+        fileBuf = pcmBytesToAudioBuffer(out);
+    } catch (e) { setMsg("Failed to build audio buffer: " + e.message); return; }
+    let host = "mic stream";
+    try { const u = new URL($("micUrl") ? $("micUrl").value.trim() : ""); host = u.hostname || "mic stream"; } catch (e) {}
+    const secs = (samples / TARGET_FS).toFixed(2);
+    const peakDb = peak > 0 ? (20 * Math.log10(peak)).toFixed(1) : "-inf";
+    fname = host + " · mic stream " + secs + "s";
+    stopPlayback();
+    setMsg("Captured " + secs + " s (" + samples + " samples, peak " + peakDb + " dBFS) — analysing…");
+    setTimeout(() => { runPipeline(); setTimeout(() => setMsg(""), 2500); }, 0);
 }
 
 /* ---------------- controls ---------------- */
@@ -652,6 +900,12 @@ function setGainDb(v) {
 }
 $("r_gain").addEventListener("input", () => setGainDb($("r_gain").value));
 $("n_gain").addEventListener("change", () => setGainDb($("n_gain").value));
+/* mic stream capture wiring */
+try { const saved = localStorage.getItem("mic_stream_url"); if (saved && $("micUrl")) $("micUrl").value = saved; } catch (e) {}
+if ($("btnMicStart")) $("btnMicStart").onclick = startMicCapture;
+if ($("btnMicStop")) $("btnMicStop").onclick = stopMicCapture;
+if ($("micUrl")) $("micUrl").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); startMicCapture(); } });
+setMicUI(); resetMicMeter();
 
 /* ---- zoom & pan event handlers ---- */
 
@@ -1441,6 +1695,7 @@ function importFromSegments() {
 }
 
 function genTestSignal() {
+    if (micCapturing) { setMsg("Stop the mic capture first."); return; }
     let c = simChimeList.find(x => x.enabled);
     if (!c) {
         if (!simChimeList.length) addSimChime();

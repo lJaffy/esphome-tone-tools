@@ -59,6 +59,16 @@
         .gainctl input[type=range] { width: 150px }
         .gainctl input[type=number] { width: 68px }
         .gainctl .unit { font-size: 11px; color: var(--dim); font-family: ui-monospace, monospace }
+        .mic-row { gap: 10px; margin-top: 10px }
+        .mic-row input[type=text] { background: #0f1318; color: var(--txt); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; font: 12px ui-monospace, monospace; min-width: 260px; flex: 1 1 320px }
+        .mic-row input[type=text]:disabled { opacity: .5 }
+        .mic-row input[type=text]::placeholder { color: #4a5260 }
+        .mic-lv { display: inline-block; width: 110px; height: 8px; background: #0f1318; border: 1px solid var(--line); border-radius: 99px; overflow: hidden; vertical-align: middle }
+        .mic-lv i { display: block; height: 100%; width: 0%; background: var(--ok); transition: width 80ms linear }
+        .mic-lv.warn i { background: #ffb454 }
+        .mic-lv.hot i { background: var(--warn) }
+        .dot-rec { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 6px rgba(255,92,92,.7); vertical-align: middle; margin-right: 4px; animation: pulse 1.1s infinite }
+        @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
 
         /* panels / steps */
         .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 14px; scroll-margin-top: 62px }
@@ -172,9 +182,9 @@
         <!-- Step 1 — Upload + gain -->
         <div class="panel" id="step1">
             <div class="step-head"><span class="step-num">1</span><span class="step-title">Upload audio &amp; match microphone gain <small>tune dB to emulate deployed ESP32 mic</small></span></div>
-            <p class="step-desc">Drop in a recording of your chime (WAV/MP3/FLAC/OGG/M4A). Use <em>gain</em> to make the spectrogram levels roughly match what your ESP32 microphone hears — this affects the segment detector and the chime simulator equally. Tip: generate a test signal from your current chime pattern when you have no recording yet.</p>
+            <p class="step-desc">Drop in a recording of your chime (WAV/MP3/FLAC/OGG/M4A/PCM). Use <em>gain</em> to make the spectrogram levels roughly match what your ESP32 microphone hears — this affects the segment detector and the chime simulator equally. Tip: generate a test signal from your current chime pattern when you have no recording yet. Or capture live audio from an ESPHome <code>mic_streamer</code> device below — the stream is recorded and then analysed like a file.</p>
             <div class="row">
-                <input type="file" id="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,audio/*">
+                <input type="file" id="file" accept=".wav,.mp3,.flac,.ogg,.m4a,.webm,.pcm,audio/*">
                 <button id="btnSimTest">generate test signal</button>
                 <span class="gainctl" title="Scale the input audio to emulate a different microphone sensitivity. Affects the spectrogram, segment levels and the chime simulator.">
                     <label for="n_gain">gain</label>
@@ -188,6 +198,15 @@
                 <button id="btnStop" disabled>■ Stop</button>
                 <span class="meta" id="pos"></span>
             </div>
+            <div class="row mic-row" id="micRow">
+                <span class="meta" style="font-weight:600;white-space:nowrap">Mic stream</span>
+                <input type="text" id="micUrl" placeholder="http://doorbell.local/mic_stream" spellcheck="false" autocomplete="off" title="Full URL of the ESPHome mic_streamer endpoint (GET /mic_stream)">
+                <button id="btnMicStart" title="Start capturing PCM from the device">● Capture</button>
+                <button id="btnMicStop" disabled title="Stop and analyse the captured audio">■ Stop &amp; analyse</button>
+                <span class="mic-lv" id="micLvWrap" title="Input level"><i id="micLevel"></i></span>
+                <span class="meta" id="micMeta">idle</span>
+            </div>
+            <div class="callout" style="margin-top:10px;margin-left:0">Streams 16-bit 16 kHz mono PCM (<code>audio/L16; rate=16000; channels=1</code>) from <code>GET /mic_stream</code> on your ESPHome <code>mic_streamer</code> device. Requires <code>allow_without_auth: true</code> so the browser can fetch it (device sends <code>Access-Control-Allow-Origin: *</code>). One client at a time — the device replies <code>429</code> if already streaming. The stream auto-finalises when the device closes it (<code>max_duration</code>) or when you press <em>Stop &amp; analyse</em>. Raw <code>.pcm</code> captures can also be uploaded via the file input.</div>
         </div>
 
         <!-- Step 2 — Spectral gates -->
