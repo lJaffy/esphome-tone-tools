@@ -7,7 +7,7 @@ from esphome.const import CONF_ID
 AUTO_LOAD = ["audio", "ring_buffer", "web_server_base"]
 DEPENDENCIES = ["microphone", "network"]
 
-CODEOWNERS = ["@esphome/core"]
+CODEOWNERS = ["lJaffy"]
 
 mic_streamer_ns = cg.esphome_ns.namespace("mic_streamer")
 MicStreamer = mic_streamer_ns.class_("MicStreamer", cg.Component)
