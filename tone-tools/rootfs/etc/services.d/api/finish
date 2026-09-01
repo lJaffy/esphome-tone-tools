@@ -1,0 +1,6 @@
+#!/usr/bin/with-contenv bashio
+declare APP_EXIT_CODE=${1}
+if [[ "${APP_EXIT_CODE}" -ne 0 ]] && [[ "${APP_EXIT_CODE}" -ne 256 ]]; then
+  bashio::log.warning "api halted with exit code ${APP_EXIT_CODE}"
+fi
+bashio::log.info "api service stopped"

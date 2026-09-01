@@ -1,0 +1,31 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start Tone Tools API (patterns persistence + mic_stream proxy)
+# ==============================================================================
+if bashio::config.exists 'log_level' 2>/dev/null; then
+  log_level=$(bashio::config 'log_level' 2>/dev/null || echo "info")
+else
+  log_level="info"
+fi
+case "${log_level}" in
+  trace|debug) gunicorn_log_level="debug" ;;
+  notice) gunicorn_log_level="info" ;;
+  warning) gunicorn_log_level="warning" ;;
+  error) gunicorn_log_level="error" ;;
+  fatal) gunicorn_log_level="critical" ;;
+  *) gunicorn_log_level="info" ;;
+esac
+bashio::log.info "Starting Tone Tools API (log_level=${log_level} -> gunicorn ${gunicorn_log_level})..."
+exec gunicorn \
+  --bind 127.0.0.1:8098 \
+  --workers 2 \
+  --threads 4 \
+  --worker-class gthread \
+  --timeout 300 \
+  --graceful-timeout 30 \
+  --keep-alive 5 \
+  --access-logfile - \
+  --error-logfile - \
+  --log-level "${gunicorn_log_level}" \
+  --pythonpath /usr/bin \
+  tone_tools_api:app

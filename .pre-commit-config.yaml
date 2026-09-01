@@ -54,3 +54,10 @@ repos:
         files: >-
           ^(esphome/components/chime/(chime_.*|core/.*)|util/(bindings\.cpp|Makefile)|wasm/.*)$
         pass_filenames: false
+      - id: www-sync
+        name: www artifacts in sync
+        entry: python util/check-www-sync.py
+        language: system
+        files: >-
+          ^(index\.html|js/app\.js|wasm/chime\.(js|wasm)|tone-tools/www/.*)$
+        pass_filenames: false

@@ -290,6 +290,12 @@ __marimo__/
 
 # Keep WASM build Makefile despite global Makefile ignore
 !util/Makefile
+!tone-tools/rootfs/etc/cont-init.d/
+!tone-tools/rootfs/etc/cont-init.d/**
+!tone-tools/rootfs/etc/services.d/
+!tone-tools/rootfs/etc/services.d/**
+!tone-tools/rootfs/etc/nginx/
+!tone-tools/rootfs/etc/nginx/**
 
 .ignore
 scratch/

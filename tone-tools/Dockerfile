@@ -22,7 +22,7 @@ COPY www /www
 
 RUN chmod +x /etc/services.d/*/run 2>/dev/null || true \
     && chmod +x /etc/services.d/*/finish 2>/dev/null || true \
-    && chmod +x /usr/bin/tone-tools-api 2>/dev/null || true
+    && chmod +x /usr/bin/tone-tools-api /usr/bin/tone_tools_api.py 2>/dev/null || true
 
 EXPOSE 8099
 

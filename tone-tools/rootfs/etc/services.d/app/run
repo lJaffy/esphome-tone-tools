@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bashio
+# ==============================================================================
+# Start nginx (ingress frontend)
+# ==============================================================================
+bashio::log.info "Generating nginx config..."
+tempio \
+    -template /etc/nginx/templates/ingress.gtpl \
+    -out /etc/nginx/http.conf
+
+bashio::log.info "Starting nginx..."
+exec nginx -c /etc/nginx/http.conf -g "daemon off;" 2>&1 | while read -r line; do bashio::log.info "${line}"; done
