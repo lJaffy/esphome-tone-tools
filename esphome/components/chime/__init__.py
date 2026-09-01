@@ -21,10 +21,9 @@ from esphome.const import (
 
 AUTO_LOAD = ["audio", "binary_sensor"]
 CODEOWNERS = ["@lJaffy"]
-# Microphone is optional – exactly one of microphone/adc must be present.
-# Keep empty DEPENDENCIES and validate at schema time so ADC-only configs
-# do not pull in the microphone component.
-DEPENDENCIES = []
+# Keep DEPENDENCIES on frequency (dsp lives under frequency/dsp, fundamental)
+# so `components: [chime, frequency]` is required; frequency alone remains installable.
+DEPENDENCIES = ["frequency"]
 
 
 CONF_PASSIVE = "passive"

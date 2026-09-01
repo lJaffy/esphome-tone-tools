@@ -1,5 +1,5 @@
 #include "frequency_engine.h"
-#include "../dsp/goertzel.h"
+#include "dsp/goertzel.h"
 
 #include <algorithm>
 #include <cmath>

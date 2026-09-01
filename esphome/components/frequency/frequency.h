@@ -9,7 +9,7 @@
 #include "esphome/core/gpio.h"
 
 #include "frequency_engine.h"
-#include "../dsp/sample_source.h"
+#include "dsp/sample_source.h"
 
 #if __has_include(<esp_adc/adc_continuous.h>)
 #include <esp_adc/adc_continuous.h>

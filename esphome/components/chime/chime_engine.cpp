@@ -1,5 +1,5 @@
 #include "chime_engine.h"
-#include "../dsp/goertzel.h"
+#include "../frequency/dsp/goertzel.h"
 
 #include <algorithm>
 #include <cmath>
