@@ -1,10 +1,6 @@
 #include "chime_engine.h"
-<<<<<<< HEAD
-#include "../frequency/dsp/goertzel.h"
-=======
->>>>>>> parent of d468977 (ADC sensor type, generic frequency sensor)
 
-    #include < algorithm>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 

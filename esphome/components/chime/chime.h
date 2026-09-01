@@ -14,22 +14,6 @@
 
 #include "chime_engine.h"
 #include "chime_types.h"
-<<<<<<< HEAD
-#include "esphome/components/frequency/dsp/sample_source.h"
-#if defined(USE_ESP32)
-#if __has_include(<esp_adc/adc_continuous.h>)
-#include <esp_adc/adc_continuous.h>
-#include <esp_adc/adc_cali.h>
-#include <esp_adc/adc_cali_scheme.h>
-#include <hal/adc_types.h>
-#else
-// IDF <5.0 fallback – driver/adc.h still provides needed types
-#include <driver/adc.h>
-#include <esp_adc_cal.h>
-#endif
-#endif
-=======
->>>>>>> parent of d468977 (ADC sensor type, generic frequency sensor)
 
     namespace esphome::chime {
 
