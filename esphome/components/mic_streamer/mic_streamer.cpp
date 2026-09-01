@@ -30,35 +30,32 @@ static const size_t RING_BUFFER_SIZE = RING_BUFFER_SAMPLES * sizeof(int16_t);
 static const size_t SEND_BUFFER_SAMPLES = 32 * SAMPLE_RATE_HZ / 1000;
 static const size_t SEND_BUFFER_SIZE = SEND_BUFFER_SAMPLES * sizeof(int16_t);
 
-float MicStreamer::get_setup_priority() const {
-  return setup_priority::AFTER_WIFI;
-}
+float MicStreamer::get_setup_priority() const { return setup_priority::AFTER_WIFI; }
 
 void MicStreamer::setup() {
   // Data callback — runs on I2S mic task thread
-  this->mic_source_->add_data_callback(
-      [this](const std::vector<uint8_t> &data) {
+  this->mic_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
 #ifdef USE_ESP32
-        std::shared_ptr<ring_buffer::RingBuffer> rb = this->ring_buffer_.lock();
-        if (rb != nullptr) {
-          rb->write((void *)data.data(), data.size());
-        }
+    std::shared_ptr<ring_buffer::RingBuffer> rb = this->ring_buffer_.lock();
+    if (rb != nullptr) {
+      rb->write((void *) data.data(), data.size());
+    }
 #else
-        // Non-ESP32 fallback: queue chunks (single-consumer, main loop /
-        // filler) Keep bounded to avoid OOM.
-        if (this->pending_bytes_ + data.size() > MAX_PENDING_BYTES) {
-          // Drop oldest chunk to make room
-          if (!this->pending_chunks_.empty()) {
-            this->pending_bytes_ -= this->pending_chunks_.front().size();
-            this->pending_chunks_.erase(this->pending_chunks_.begin());
-          }
-        }
-        if (this->pending_bytes_ + data.size() <= MAX_PENDING_BYTES) {
-          this->pending_chunks_.push_back(data);
-          this->pending_bytes_ += data.size();
-        }
+    // Non-ESP32 fallback: queue chunks (single-consumer, main loop /
+    // filler) Keep bounded to avoid OOM.
+    if (this->pending_bytes_ + data.size() > MAX_PENDING_BYTES) {
+      // Drop oldest chunk to make room
+      if (!this->pending_chunks_.empty()) {
+        this->pending_bytes_ -= this->pending_chunks_.front().size();
+        this->pending_chunks_.erase(this->pending_chunks_.begin());
+      }
+    }
+    if (this->pending_bytes_ + data.size() <= MAX_PENDING_BYTES) {
+      this->pending_chunks_.push_back(data);
+      this->pending_bytes_ += data.size();
+    }
 #endif
-      });
+  });
 
   // Register HTTP handler
   if (this->allow_without_auth_) {
@@ -79,8 +76,7 @@ void MicStreamer::setup() {
 void MicStreamer::dump_config() {
   ESP_LOGCONFIG(TAG, "Mic Streamer:");
   ESP_LOGCONFIG(TAG, "  Max duration: %" PRIu32 " ms", this->max_duration_ms_);
-  ESP_LOGCONFIG(TAG, "  Allow without auth: %s",
-                YESNO(this->allow_without_auth_));
+  ESP_LOGCONFIG(TAG, "  Allow without auth: %s", YESNO(this->allow_without_auth_));
 }
 
 void MicStreamer::loop() {
@@ -88,16 +84,14 @@ void MicStreamer::loop() {
   // For IDF the streaming is done blocking inside handleRequest on the httpd
   // task, so the main loop has nothing to do while streaming.
   // Keep loop free for non-IDF timeout handling.
-  if (this->streaming_active_ &&
-      (millis() - this->stream_start_ms_ > this->max_duration_ms_)) {
+  if (this->streaming_active_ && (millis() - this->stream_start_ms_ > this->max_duration_ms_)) {
     // Timeout reached — the IDF task will notice on next chunk and exit,
     // but set flag as fallback.
     ESP_LOGW(TAG, "Max duration reached, stopping stream (loop watchdog)");
     this->streaming_active_ = false;
   }
 #else
-  if (this->streaming_active_ &&
-      (millis() - this->stream_start_ms_ > this->max_duration_ms_)) {
+  if (this->streaming_active_ && (millis() - this->stream_start_ms_ > this->max_duration_ms_)) {
     ESP_LOGW(TAG, "Max duration reached, stopping stream");
     this->stop_streaming_();
   }
@@ -120,15 +114,12 @@ bool MicStreamer::canHandle(AsyncWebServerRequest *request) const {
 bool MicStreamer::allocate_buffers_() {
   if (this->audio_source_ != nullptr)
     return true;
-  std::shared_ptr<ring_buffer::RingBuffer> rb =
-      ring_buffer::RingBuffer::create(RING_BUFFER_SIZE);
+  std::shared_ptr<ring_buffer::RingBuffer> rb = ring_buffer::RingBuffer::create(RING_BUFFER_SIZE);
   if (rb == nullptr) {
-    ESP_LOGE(TAG, "Could not allocate ring buffer (%zu bytes)",
-             RING_BUFFER_SIZE);
+    ESP_LOGE(TAG, "Could not allocate ring buffer (%zu bytes)", RING_BUFFER_SIZE);
     return false;
   }
-  auto src = audio::RingBufferAudioSource::create(rb, SEND_BUFFER_SIZE,
-                                                  sizeof(int16_t));
+  auto src = audio::RingBufferAudioSource::create(rb, SEND_BUFFER_SIZE, sizeof(int16_t));
   if (src == nullptr) {
     ESP_LOGE(TAG, "Could not allocate audio source");
     return false;
@@ -214,8 +205,7 @@ void MicStreamer::handleRequest(AsyncWebServerRequest *request) {
       continue;
     }
 
-    esp_err_t err = httpd_resp_send_chunk(
-        req, (const char *)this->audio_source_->data(), avail);
+    esp_err_t err = httpd_resp_send_chunk(req, (const char *) this->audio_source_->data(), avail);
     if (err != ESP_OK) {
       ESP_LOGI(TAG, "Client disconnected (send err %d)", err);
       break;
@@ -235,9 +225,8 @@ void MicStreamer::handleRequest(AsyncWebServerRequest *request) {
   // start flag already set; max duration check is done in filler and loop().
   request->onDisconnect([this]() { this->stop_streaming_(); });
 
-  auto filler = [this](uint8_t *buffer, size_t max_len,
-                       size_t index) -> size_t {
-    (void)index;
+  auto filler = [this](uint8_t *buffer, size_t max_len, size_t index) -> size_t {
+    (void) index;
     if (!this->streaming_active_) {
       return 0;
     }
@@ -291,8 +280,7 @@ void MicStreamer::handleRequest(AsyncWebServerRequest *request) {
 
   // sendChunked will keep calling filler until it returns 0.
   // Content-Type raw PCM; browsers use fetch() + AudioContext.
-  AsyncWebServerResponse *response = request->beginChunkedResponse(
-      "audio/L16; rate=16000; channels=1", filler);
+  AsyncWebServerResponse *response = request->beginChunkedResponse("audio/L16; rate=16000; channels=1", filler);
   // Add CORS if not already via DefaultHeaders — AsyncWebServer handles
   // separately, but we ensure no-cache.
   response->addHeader("Cache-Control", "no-cache");
@@ -303,6 +291,6 @@ void MicStreamer::handleRequest(AsyncWebServerRequest *request) {
 #endif
 }
 
-} // namespace esphome::mic_streamer
+}  // namespace esphome::mic_streamer
 
-#endif // USE_MIC_STREAMER
+#endif  // USE_MIC_STREAMER

@@ -129,4 +129,4 @@ struct RunResult {
   std::vector<TickSnapshot> ticks;
 };
 
-} // namespace esphome::chime::core
+}  // namespace esphome::chime::core

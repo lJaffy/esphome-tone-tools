@@ -21,11 +21,8 @@ void ChimePattern::reset_pattern() {
   need_falling_edge = false;
 }
 
-bool ChimePattern::chord_present(const float *spectrum_db,
-                                 const float *noise_floor,
-                                 const float *local_bg,
-                                 const float *onset_contrast, uint8_t step,
-                                 float &peak_db) const {
+bool ChimePattern::chord_present(const float *spectrum_db, const float *noise_floor, const float *local_bg,
+                                 const float *onset_contrast, uint8_t step, float &peak_db) const {
   const auto &indices = chord_filter_indices[step];
   peak_db = -300.0f;
   for (size_t i = 0; i < indices.size(); ++i) {
@@ -51,12 +48,9 @@ bool ChimePattern::chord_present(const float *spectrum_db,
   return true;
 }
 
-ChimePattern::BinGate ChimePattern::bin_gates(const float *spectrum_db,
-                                              const float *noise_floor,
-                                              bool noise_floor_ready,
-                                              const float *local_bg,
-                                              const float *onset_contrast,
-                                              uint32_t filter_idx) const {
+ChimePattern::BinGate ChimePattern::bin_gates(const float *spectrum_db, const float *noise_floor,
+                                              bool noise_floor_ready, const float *local_bg,
+                                              const float *onset_contrast, uint32_t filter_idx) const {
   BinGate g;
   g.db = spectrum_db[filter_idx];
   float eff = cfg_.threshold_db;
@@ -75,9 +69,8 @@ ChimePattern::BinGate ChimePattern::bin_gates(const float *spectrum_db,
   return g;
 }
 
-void ChimePattern::latch_detection_(
-    uint32_t now_ms, uint32_t elapsed_ms, uint32_t chime_index,
-    uint32_t tick_index, const std::function<void(const Event &)> &emit) {
+void ChimePattern::latch_detection_(uint32_t now_ms, uint32_t elapsed_ms, uint32_t chime_index, uint32_t tick_index,
+                                    const std::function<void(const Event &)> &emit) {
   Event ev;
   ev.type = EventType::Detected;
   ev.chime_index = chime_index;
@@ -94,17 +87,15 @@ void ChimePattern::latch_detection_(
   need_falling_edge = false;
 }
 
-void ChimePattern::evaluate_pattern(
-    uint32_t now_ms, const float *spectrum_db, const float *noise_floor,
-    const float *local_bg, const float *onset_contrast, uint32_t chime_index,
-    uint32_t tick_index, const std::function<void(const Event &)> &emit) {
+void ChimePattern::evaluate_pattern(uint32_t now_ms, const float *spectrum_db, const float *noise_floor,
+                                    const float *local_bg, const float *onset_contrast, uint32_t chime_index,
+                                    uint32_t tick_index, const std::function<void(const Event &)> &emit) {
   const uint32_t num_steps = static_cast<uint32_t>(cfg_.pattern.size());
   const uint32_t elapsed = now_ms - pattern_start_ms;
 
   if (!pattern_active) {
     float peak = -300.0f;
-    if (chord_present(spectrum_db, noise_floor, local_bg, onset_contrast, 0,
-                      peak)) {
+    if (chord_present(spectrum_db, noise_floor, local_bg, onset_contrast, 0, peak)) {
       pattern_active = true;
       match_index = 1;
       pattern_start_ms = now_ms;
@@ -128,8 +119,7 @@ void ChimePattern::evaluate_pattern(
     const uint8_t prev_idx = static_cast<uint8_t>(match_index - 1);
     const uint8_t next_idx = static_cast<uint8_t>(match_index);
     const auto &prev_chord = cfg_.pattern[prev_idx];
-    const std::vector<float> *next_chord =
-        (next_idx < num_steps) ? &cfg_.pattern[next_idx] : nullptr;
+    const std::vector<float> *next_chord = (next_idx < num_steps) ? &cfg_.pattern[next_idx] : nullptr;
 
     bool prev_subset_of_next = false;
     if (next_chord != nullptr) {
@@ -153,8 +143,7 @@ void ChimePattern::evaluate_pattern(
       need_falling_edge = false;
     } else {
       float prev_peak = -300.0f;
-      if (chord_present(spectrum_db, noise_floor, local_bg, onset_contrast,
-                        prev_idx, prev_peak)) {
+      if (chord_present(spectrum_db, noise_floor, local_bg, onset_contrast, prev_idx, prev_peak)) {
         return;
       }
       need_falling_edge = false;
@@ -194,9 +183,7 @@ void ChimePattern::evaluate_pattern(
   }
 
   const uint32_t chord_idx = match_index;
-  const uint32_t t_chord = (chord_idx < cfg_.pattern_times_ms.size())
-                               ? cfg_.pattern_times_ms[chord_idx]
-                               : NO_TIME;
+  const uint32_t t_chord = (chord_idx < cfg_.pattern_times_ms.size()) ? cfg_.pattern_times_ms[chord_idx] : NO_TIME;
 
   if (t_chord != NO_TIME && elapsed < t_chord)
     return;
@@ -204,15 +191,11 @@ void ChimePattern::evaluate_pattern(
   if (t_chord != NO_TIME) {
     const uint32_t next_idx = chord_idx + 1;
     const uint32_t t_next =
-        (next_idx < num_steps && next_idx < cfg_.pattern_times_ms.size())
-            ? cfg_.pattern_times_ms[next_idx]
-            : NO_TIME;
-    const uint32_t window_end =
-        (t_next != NO_TIME) ? t_next : (t_chord + cfg_.tail_grace_ms);
+        (next_idx < num_steps && next_idx < cfg_.pattern_times_ms.size()) ? cfg_.pattern_times_ms[next_idx] : NO_TIME;
+    const uint32_t window_end = (t_next != NO_TIME) ? t_next : (t_chord + cfg_.tail_grace_ms);
     // Narrow latch window to first quarter of inter-step interval or 2 ticks,
     // whichever larger, capped to window.
-    const uint32_t window_len =
-        (window_end > t_chord) ? window_end - t_chord : 0;
+    const uint32_t window_len = (window_end > t_chord) ? window_end - t_chord : 0;
     const uint32_t quarter = window_len / 4;
     const uint32_t two_ticks = 2 * tick_interval_ms_;
     uint32_t allowed_len = std::max(quarter, two_ticks);
@@ -239,8 +222,7 @@ void ChimePattern::evaluate_pattern(
   }
 
   float peak = -300.0f;
-  if (chord_present(spectrum_db, noise_floor, local_bg, onset_contrast,
-                    chord_idx, peak)) {
+  if (chord_present(spectrum_db, noise_floor, local_bg, onset_contrast, chord_idx, peak)) {
     if (emit) {
       Event ev;
       ev.type = EventType::ChordMatch;
@@ -278,4 +260,4 @@ void ChimePattern::evaluate_pattern(
   }
 }
 
-} // namespace esphome::chime::core
+}  // namespace esphome::chime::core

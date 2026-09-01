@@ -17,13 +17,7 @@ from esphome.const import (
 
 AUTO_LOAD = ["audio", "binary_sensor"]
 CODEOWNERS = ["@lJaffy"]
-<<<<<<< HEAD
-# Keep DEPENDENCIES on frequency (dsp lives under frequency/dsp, fundamental)
-# so `components: [chime, frequency]` is required; frequency alone remains installable.
-DEPENDENCIES = ["frequency"]
-=======
 DEPENDENCIES = ["microphone"]
->>>>>>> parent of d468977 (ADC sensor type, generic frequency sensor)
 
 
 CONF_PASSIVE = "passive"

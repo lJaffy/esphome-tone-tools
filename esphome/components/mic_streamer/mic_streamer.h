@@ -17,7 +17,7 @@
 namespace esphome::mic_streamer {
 
 class MicStreamer : public Component, public AsyncWebHandler {
-public:
+ public:
   explicit MicStreamer(web_server_base::WebServerBase *base) : base_(base) {}
 
   void setup() override;
@@ -28,13 +28,11 @@ public:
   bool canHandle(AsyncWebServerRequest *request) const override;
   void handleRequest(AsyncWebServerRequest *request) override;
 
-  void set_microphone_source(microphone::MicrophoneSource *mic_source) {
-    this->mic_source_ = mic_source;
-  }
+  void set_microphone_source(microphone::MicrophoneSource *mic_source) { this->mic_source_ = mic_source; }
   void set_allow_without_auth(bool v) { this->allow_without_auth_ = v; }
   void set_max_duration(uint32_t ms) { this->max_duration_ms_ = ms; }
 
-protected:
+ protected:
   bool allocate_buffers_();
   void clear_buffers_();
   void deallocate_buffers_();
@@ -66,12 +64,12 @@ protected:
 #else
   // Fallback for non-ESP32 Arduino targets: lightweight queue of chunks.
   // Protected by main loop single-thread, handler fills via callback.
-  std::vector<std::vector<uint8_t>> pending_chunks_;
+  std::vector<std::vector<uint8_t> > pending_chunks_;
   size_t pending_bytes_{0};
   static constexpr size_t MAX_PENDING_BYTES = 32768;
 #endif
 };
 
-} // namespace esphome::mic_streamer
+}  // namespace esphome::mic_streamer
 
-#endif // USE_MIC_STREAMER
+#endif  // USE_MIC_STREAMER
