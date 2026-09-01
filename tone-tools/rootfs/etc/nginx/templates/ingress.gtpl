@@ -1,3 +1,7 @@
+user root;
+pid /var/cache/nginx/nginx.pid;
+error_log /dev/stderr info;
+
 events {
     worker_connections 16;
 }
@@ -7,7 +11,11 @@ http {
     sendfile on;
     keepalive_timeout 65;
     access_log /dev/stdout;
-    error_log /dev/stderr info;
+    client_body_temp_path /var/cache/nginx/client_body;
+    proxy_temp_path /var/cache/nginx/proxy;
+    fastcgi_temp_path /var/cache/nginx/fastcgi;
+    uwsgi_temp_path /var/cache/nginx/uwsgi;
+    scgi_temp_path /var/cache/nginx/scgi;
 
     server {
         listen 8099 default_server;

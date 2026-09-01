@@ -20,6 +20,11 @@ RUN apk add --no-cache nginx python3 py3-flask py3-gunicorn bash jq curl \
 COPY rootfs /
 COPY www /www
 
+RUN mkdir -p /var/cache/nginx/client_body /var/cache/nginx/proxy /var/cache/nginx/fastcgi /var/cache/nginx/uwsgi /var/cache/nginx/scgi \
+    && chmod -R 777 /var/cache/nginx \
+    && mkdir -p /var/lib/nginx/logs /var/lib/nginx/tmp \
+    && chmod -R 777 /var/lib/nginx 2>/dev/null || true
+
 RUN chmod +x /etc/services.d/*/run 2>/dev/null || true \
     && chmod +x /etc/services.d/*/finish 2>/dev/null || true \
     && chmod +x /usr/bin/tone-tools-api /usr/bin/tone_tools_api.py 2>/dev/null || true
