@@ -11,16 +11,16 @@ A collection of ESPHome components for **audio analysis on ESP32 with 16-bit mic
 | Component | Purpose | ESP entity |
 |-----------|---------|------------|
 | `chime` | Detect 1–8 independent timed tone/chord sequences, each with its own pattern and binary sensor. Shared deduplicated Goertzel bank. | `binary_sensor` (1 per `chimes` entry) |
-| `sound_frequency` | Detect the dominant frequency in a band and publish Hz + level. | `sensor` (`frequency` / `peak_magnitude`) |
+| `frequency` | Detect the dominant frequency in a band and publish Hz + level. Source-agnostic: `microphone:` or `adc:` (pipe/piezo). | `sensor` (`frequency` / `peak_magnitude`) |
 
-Both require ESP32 + a `microphone` source at 16-bit. Only `chime` is covered by the simulator; `sound_frequency` is standalone.
+Both require ESP32 + a sample source (`microphone:` 16-bit or `adc:` pin) at 16-bit-equivalent. Only `chime` is covered by the simulator; `frequency` is standalone. Both share the same `dsp/` Goertzel + `SampleSource` abstraction.
 
 ### Installation
 
 ```yaml
 external_components:
   - source: github://ljaffy/esphome-tone-tools@main
-    components: [chime, sound_frequency]
+    components: [chime, frequency]
     refresh: 0h
 
 microphone:
@@ -101,14 +101,15 @@ on_...:
 
 ---
 
-## `sound_frequency` — Dominant Frequency Sensor
+## `frequency` — Dominant Frequency Sensor (source-agnostic)
 
-Publishes the loudest frequency in a band each `measurement_duration` window.
+Publishes the loudest frequency in a band each `measurement_duration` window. Accepts exactly one source: `microphone:` (acoustic) or `adc:` (mechanically-coupled pipe/piezo, `pin`/`attenuation`/`sample_rate` 4k–48k/`adc_gain`).
 
 | Option | Type | Default | Notes |
 |--------|------|---------|-------|
-| `microphone` | microphone source (16-bit) | optional |  |
-| `passive` | `bool` | **required** |  |
+| `microphone` | microphone source (16-bit) |  | XOR with `adc`. |
+| `adc` | `pin`, `attenuation`, `sample_rate`, `adc_gain` |  | XOR with `microphone`. See `chime` ADC docs. |
+| `passive` | `bool` | **required** | `true` = never start/stop source; `false` = owns lifecycle (both mic/ADC). |
 | `window_size` | `64–4096` | `1024` |  |
 | `min_frequency` | `frequency` | `100Hz` |  |
 | `max_frequency` | `frequency` | `12000Hz` | Band upper bound. `min < max` required. |
@@ -117,7 +118,7 @@ Publishes the loudest frequency in a band each `measurement_duration` window.
 | `frequency` | `sensor` | optional | Dominant frequency in Hz. |
 | `peak_magnitude` | `sensor` | optional | Peak level in dB. |
 
-At least one of `frequency` / `peak_magnitude` is required. Automations `sound_frequency.start` / `stop` (passive-aware).
+At least one of `frequency` / `peak_magnitude` is required. Automations `frequency.start` / `stop` (passive-aware). Pure DSP lives in `frequency/frequency_engine.h` (like `chime/chime_engine.h`) and shares `dsp/goertzel.h` + `dsp/sample_source`.
 
 ---
 
@@ -236,7 +237,7 @@ Click **Download YAML** to save it, paste it into your ESPHome config, replace `
 ```yaml
 external_components:
   - source: github://ljaffy/esphome-tone-tools@main
-    components: [chime, sound_frequency]
+    components: [chime, frequency]
     refresh: 0h
 
 microphone:
@@ -282,7 +283,7 @@ chime:
         max: 5000ms
       threshold: -55
 
-sound_frequency:
+frequency:
   microphone: i2s_mic
   passive: true
   window_size: 1024
@@ -294,6 +295,20 @@ sound_frequency:
     name: "Dominant Frequency"
   peak_magnitude:
     name: "Peak Level"
+
+# ADC example (mechanically-coupled pipe/piezo) – works for both chime and frequency:
+# frequency:
+#   adc:
+#     pin: GPIO4
+#     attenuation: 11db
+#     sample_rate: 16000
+#     adc_gain: 4
+#   passive: false
+#   window_size: 1024
+#   min_frequency: 100Hz
+#   max_frequency: 2000Hz
+#   frequency:
+#     name: "Pipe Frequency"
 ```
 
 ## License
