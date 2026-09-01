@@ -12,7 +12,6 @@ RUN apk add --no-cache nginx python3 py3-pip bash jq curl \
     && case "${BUILD_ARCH}" in \
         amd64) tempio_arch="amd64" ;; \
         aarch64|arm64) tempio_arch="aarch64" ;; \
-        armv7|armhf) tempio_arch="armv7" ;; \
         *) tempio_arch="amd64" ;; \
     esac \
     && curl -sSLf -o /usr/bin/tempio \
