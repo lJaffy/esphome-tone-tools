@@ -1,0 +1,48 @@
+#include <tunables/global>
+
+profile tone-tools flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  file,
+  signal (send) set=(kill,term,int,hup,cont),
+
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /package/** ix,
+  /command/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /run/{,**} rwk,
+  /dev/tty rw,
+
+  /usr/lib/bashio/** ix,
+  /tmp/** rwk,
+
+  /data/** rw,
+  /share/** rw,
+  /config/** rw,
+  /www/** r,
+
+  /usr/bin/tone-tools-api cx -> tone-tools-api,
+
+  profile tone-tools-api flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    signal (receive) peer=*_tone-tools,
+    /data/** rw,
+    /share/** rw,
+    /config/** rw,
+    /www/** r,
+    /usr/bin/tone-tools-api r,
+    /usr/bin/python3* rix,
+    /usr/bin/nginx rix,
+    /bin/bash rix,
+    /bin/echo ix,
+    /etc/passwd r,
+    /dev/tty rw,
+    network inet stream,
+    network inet6 stream,
+  }
+}
