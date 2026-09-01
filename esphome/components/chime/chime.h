@@ -15,7 +15,7 @@
 
 #include "chime_engine.h"
 #include "chime_types.h"
-#include "../frequency/dsp/sample_source.h"
+#include "esphome/components/frequency/dsp/sample_source.h"
 
 #if defined(USE_ESP32)
 #if __has_include(<esp_adc/adc_continuous.h>)
