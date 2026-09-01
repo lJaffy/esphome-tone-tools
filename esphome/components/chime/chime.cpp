@@ -44,7 +44,7 @@ void Chime::sync_from_core(const core::ChimePattern &p) {
 }
 void Chime::sync_to_core(core::ChimePattern &p) const {
   // Config sync is handled via to_core_config rebuild; state sync not needed here.
-  (void)p;
+  (void) p;
 }
 bool Chime::chord_present_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
                            const float *onset_contrast, uint8_t step, float &peak_db) const {
@@ -59,21 +59,28 @@ void Chime::log_chord_(uint8_t step) const {
   const auto &chord = pattern_chords_[step];
   std::string parts;
   for (size_t i = 0; i < chord.size(); ++i) {
-    if (i) parts += ", ";
-    char buf[16]; snprintf(buf, sizeof(buf), "%.0f", chord[i]); parts += buf;
+    if (i)
+      parts += ", ";
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%.0f", chord[i]);
+    parts += buf;
   }
-  ESP_LOGD(TAG, "  chord[%u] = [%s] Hz", (unsigned)step, parts.c_str());
+  ESP_LOGD(TAG, "  chord[%u] = [%s] Hz", (unsigned) step, parts.c_str());
 }
 void Chime::evaluate_pattern_(const float *spectrum_db, const float *noise_floor, const float *local_bg,
                               const float *onset_contrast) {
   // No-op: real evaluation is via engine. Kept for compat.
-  (void)spectrum_db; (void)noise_floor; (void)local_bg; (void)onset_contrast;
+  (void) spectrum_db;
+  (void) noise_floor;
+  (void) local_bg;
+  (void) onset_contrast;
 }
 void Chime::latch_detection_(uint32_t elapsed_ms) {
-  (void)elapsed_ms;
+  (void) elapsed_ms;
   detected_latched_ = true;
   release_until_ms_ = millis() + release_time_ms_;
-  if (detected_sensor_ != nullptr) detected_sensor_->publish_state(true);
+  if (detected_sensor_ != nullptr)
+    detected_sensor_->publish_state(true);
 }
 void Chime::reset_pattern_() {
   pattern_active_ = false;
@@ -96,29 +103,33 @@ void ChimeComponent::dump_config() {
                 "  Total Goertzel filters: %lu\n"
                 "  Noise Floor: alpha_down=%.3f, alpha_up=%.4f\n"
                 "  Guard Separation: %.0f Hz",
-                window_size_, tick_interval_ms_, (unsigned long)chimes_.size(),
-                (unsigned long)total_filters_, noise_floor_alpha_down_, noise_floor_alpha_up_,
-                guard_separation_hz_);
+                window_size_, tick_interval_ms_, (unsigned long) chimes_.size(), (unsigned long) total_filters_,
+                noise_floor_alpha_down_, noise_floor_alpha_up_, guard_separation_hz_);
   for (size_t d = 0; d < chimes_.size(); ++d) {
     auto &c = chimes_[d];
-    ESP_LOGCONFIG(TAG, "    Chime[%lu]:", (unsigned long)d);
+    ESP_LOGCONFIG(TAG, "    Chime[%lu]:", (unsigned long) d);
     ESP_LOGCONFIG(TAG, "      Min Duration: %" PRIu32 " ms", c.min_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Max Duration: %" PRIu32 " ms", c.max_duration_ms_);
     ESP_LOGCONFIG(TAG, "      Threshold: %.1f dB (hard floor)", c.threshold_db_);
     ESP_LOGCONFIG(TAG, "      SNR Margin: %.1f dB", c.snr_margin_db_);
     ESP_LOGCONFIG(TAG, "      Prominence: %.1f dB (vs local background)", c.prominence_db_);
-    ESP_LOGCONFIG(TAG, "      Onset Contrast: %.1f dB (lookback=%u ticks)", c.onset_contrast_db_, (unsigned)ONSET_LOOKBACK);
+    ESP_LOGCONFIG(TAG, "      Onset Contrast: %.1f dB (lookback=%u ticks)", c.onset_contrast_db_,
+                  (unsigned) ONSET_LOOKBACK);
     ESP_LOGCONFIG(TAG, "      Tail Grace: %" PRIu32 " ms", c.tail_grace_ms_);
     ESP_LOGCONFIG(TAG, "      Release Time: %" PRIu32 " ms (auto)", c.release_time_ms_);
-    ESP_LOGCONFIG(TAG, "      Pattern (%lu steps):", (unsigned long)c.pattern_chords_.size());
+    ESP_LOGCONFIG(TAG, "      Pattern (%lu steps):", (unsigned long) c.pattern_chords_.size());
     for (size_t s = 0; s < c.pattern_chords_.size(); ++s) {
       const auto &chord = c.pattern_chords_[s];
       const uint32_t t_ms = (s < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[s] : NO_TIME;
-      if (t_ms == NO_TIME) ESP_LOGCONFIG(TAG, "        [%u] @ (any time):", (unsigned)s);
-      else ESP_LOGCONFIG(TAG, "        [%u] @ %lu ms:", (unsigned)s, (unsigned long)t_ms);
-      for (size_t f = 0; f < chord.size(); ++f) ESP_LOGCONFIG(TAG, "          %.1f Hz", chord[f]);
+      if (t_ms == NO_TIME)
+        ESP_LOGCONFIG(TAG, "        [%u] @ (any time):", (unsigned) s);
+      else
+        ESP_LOGCONFIG(TAG, "        [%u] @ %lu ms:", (unsigned) s, (unsigned long) t_ms);
+      for (size_t f = 0; f < chord.size(); ++f)
+        ESP_LOGCONFIG(TAG, "          %.1f Hz", chord[f]);
     }
-    if (c.detected_sensor_ != nullptr) LOG_BINARY_SENSOR("      ", "Sensor:", c.detected_sensor_);
+    if (c.detected_sensor_ != nullptr)
+      LOG_BINARY_SENSOR("      ", "Sensor:", c.detected_sensor_);
   }
 }
 
@@ -151,46 +162,62 @@ void ChimeComponent::build_frequency_map_() {
 void ChimeComponent::setup() {
   microphone_source_->add_data_callback([this](const std::vector<uint8_t> &data) {
     auto rb = ring_buffer_.lock();
-    if (rb != nullptr) rb->write((void *)data.data(), data.size());
+    if (rb != nullptr)
+      rb->write((void *) data.data(), data.size());
   });
   if (chimes_.empty()) {
     ESP_LOGE(TAG, "No chimes configured – nothing to do");
     return;
   }
   build_frequency_map_();
-  ESP_LOGI(TAG, "Global Goertzel filters: %lu", (unsigned long)total_filters_);
+  ESP_LOGI(TAG, "Global Goertzel filters: %lu", (unsigned long) total_filters_);
   // Window / buffers are owned by engine; just mark ready and ensure frame_buf for streaming
   sample_rate_hz_ = 0.0f;
   dsp_ready_ = true;
   // Alias pointers for diagnostics (point into engine vectors' storage – valid until rebuild)
   // We keep them as null and read via engine getters in diagnostics instead.
-  if (!microphone_source_->is_passive()) microphone_source_->start();
+  if (!microphone_source_->is_passive())
+    microphone_source_->start();
 }
 
 void ChimeComponent::loop() {
-  if (!dsp_ready_ || !engine_built_) return;
+  if (!dsp_ready_ || !engine_built_)
+    return;
 
   bool any_sensor = false;
-  for (auto &c : chimes_) if (c.detected_sensor_ != nullptr) { any_sensor = true; break; }
+  for (auto &c : chimes_)
+    if (c.detected_sensor_ != nullptr) {
+      any_sensor = true;
+      break;
+    }
 
   if (microphone_source_->is_running() && !status_has_error()) {
-    if (start_()) status_clear_warning();
-    else { ESP_LOGW(TAG, "Buffer allocation failed"); return; }
+    if (start_())
+      status_clear_warning();
+    else {
+      ESP_LOGW(TAG, "Buffer allocation failed");
+      return;
+    }
   } else {
-    if (!status_has_warning()) status_set_warning(LOG_STR("Microphone is not running"));
+    if (!status_has_warning())
+      status_set_warning(LOG_STR("Microphone is not running"));
     stop_();
-    if (any_sensor) for (auto &c : chimes_) if (c.detected_sensor_ != nullptr) c.detected_sensor_->publish_state(false);
+    if (any_sensor)
+      for (auto &c : chimes_)
+        if (c.detected_sensor_ != nullptr)
+          c.detected_sensor_->publish_state(false);
     return;
   }
-  if (status_has_error()) return;
+  if (status_has_error())
+    return;
 
   const auto &stream_info = microphone_source_->get_audio_stream_info();
 
   if (sample_rate_hz_ == 0.0f) {
     sample_rate_hz_ = static_cast<float>(stream_info.get_sample_rate());
     engine_.set_sample_rate(sample_rate_hz_);
-    ESP_LOGI(TAG, "Goertzel init: %lu filters, N=%" PRIu16 ", fs=%" PRIu32 " Hz",
-             (unsigned long)total_filters_, window_size_, (uint32_t)stream_info.get_sample_rate());
+    ESP_LOGI(TAG, "Goertzel init: %lu filters, N=%" PRIu16 ", fs=%" PRIu32 " Hz", (unsigned long) total_filters_,
+             window_size_, (uint32_t) stream_info.get_sample_rate());
   }
 
   const uint32_t samples_in_tick = stream_info.ms_to_samples(tick_interval_ms_);
@@ -221,21 +248,62 @@ void ChimeComponent::loop() {
     bool emitted = engine_.try_emit_tick(now_ms, evs, nullptr);
     if (emitted) {
       // Sync wrapper state from engine and handle sensor publishes / diagnostics
-      for (size_t i = 0; i < chimes_.size(); ++i) chimes_[i].sync_from_core(engine_.chime(i));
+      for (size_t i = 0; i < chimes_.size(); ++i)
+        chimes_[i].sync_from_core(engine_.chime(i));
       for (auto &ev : evs) {
         size_t idx = ev.chime_index;
-        if (idx >= chimes_.size()) continue;
+        if (idx >= chimes_.size())
+          continue;
         auto &w = chimes_[idx];
         switch (ev.type) {
-          case core::EventType::Detected: w.detected_latched_ = true; w.release_until_ms_ = ev.now_ms + w.release_time_ms_; if (w.detected_sensor_) w.detected_sensor_->publish_state(true); ESP_LOGI(TAG, "CHIME DETECTED in %" PRIu32 " ms (%lu steps)", (unsigned long)ev.elapsed_ms, (unsigned long)ev.num_steps); break;
-          case core::EventType::Released: w.detected_latched_ = false; if (w.detected_sensor_) w.detected_sensor_->publish_state(false); ESP_LOGD(TAG, "Chime[%u] released after %" PRIu32 " ms hold", (unsigned)idx, (unsigned long)ev.hold_ms); break;
-          case core::EventType::MaxDurationTimeout: w.pattern_active_ = false; w.match_index_ = 0; w.need_falling_edge_ = false; ESP_LOGD(TAG, "Chime[%u] timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%u)", (unsigned)idx, (unsigned long)ev.elapsed_ms, (unsigned long)ev.max_ms, (unsigned)ev.matched, (unsigned)ev.num_steps); if (!w.detected_latched_ && w.detected_sensor_) w.detected_sensor_->publish_state(false); break;
-          case core::EventType::PatternStart: ESP_LOGI(TAG, "Chime pattern started: chord 1/%u, peak %.1f dB", (unsigned)ev.num_steps, ev.peak_db); break;
-          case core::EventType::FallingEdge: ESP_LOGD(TAG, "Falling edge after chord %u/%u at t=%" PRIu32 " ms", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned long)ev.elapsed_ms); break;
-          case core::EventType::ChordMatch: ESP_LOGD(TAG, "Chord %u/%u matched at t=%" PRIu32 " ms, peak %.1f dB", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned long)ev.elapsed_ms, ev.peak_db); break;
-          case core::EventType::MinDurationDiscount: ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms", (unsigned long)ev.elapsed_ms, (unsigned long)ev.min_ms); break;
-          case core::EventType::StepTimeout: ESP_LOGW(TAG, "Chime timed out: chord %u/%u not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32 " ms)", (unsigned)(ev.step+1), (unsigned)ev.num_steps, (unsigned long)ev.t_chord_ms, (unsigned long)ev.window_end_ms, (unsigned long)ev.elapsed_ms); break;
-          default: break;
+          case core::EventType::Detected:
+            w.detected_latched_ = true;
+            w.release_until_ms_ = ev.now_ms + w.release_time_ms_;
+            if (w.detected_sensor_)
+              w.detected_sensor_->publish_state(true);
+            ESP_LOGI(TAG, "CHIME DETECTED in %" PRIu32 " ms (%lu steps)", (unsigned long) ev.elapsed_ms,
+                     (unsigned long) ev.num_steps);
+            break;
+          case core::EventType::Released:
+            w.detected_latched_ = false;
+            if (w.detected_sensor_)
+              w.detected_sensor_->publish_state(false);
+            ESP_LOGD(TAG, "Chime[%u] released after %" PRIu32 " ms hold", (unsigned) idx, (unsigned long) ev.hold_ms);
+            break;
+          case core::EventType::MaxDurationTimeout:
+            w.pattern_active_ = false;
+            w.match_index_ = 0;
+            w.need_falling_edge_ = false;
+            ESP_LOGD(TAG, "Chime[%u] timed out after %" PRIu32 " ms (max %" PRIu32 " ms, matched %u/%u)",
+                     (unsigned) idx, (unsigned long) ev.elapsed_ms, (unsigned long) ev.max_ms, (unsigned) ev.matched,
+                     (unsigned) ev.num_steps);
+            if (!w.detected_latched_ && w.detected_sensor_)
+              w.detected_sensor_->publish_state(false);
+            break;
+          case core::EventType::PatternStart:
+            ESP_LOGI(TAG, "Chime pattern started: chord 1/%u, peak %.1f dB", (unsigned) ev.num_steps, ev.peak_db);
+            break;
+          case core::EventType::FallingEdge:
+            ESP_LOGD(TAG, "Falling edge after chord %u/%u at t=%" PRIu32 " ms", (unsigned) (ev.step + 1),
+                     (unsigned) ev.num_steps, (unsigned long) ev.elapsed_ms);
+            break;
+          case core::EventType::ChordMatch:
+            ESP_LOGD(TAG, "Chord %u/%u matched at t=%" PRIu32 " ms, peak %.1f dB", (unsigned) (ev.step + 1),
+                     (unsigned) ev.num_steps, (unsigned long) ev.elapsed_ms, ev.peak_db);
+            break;
+          case core::EventType::MinDurationDiscount:
+            ESP_LOGD(TAG, "Chime discounted: completed in %" PRIu32 " ms, below min %" PRIu32 " ms",
+                     (unsigned long) ev.elapsed_ms, (unsigned long) ev.min_ms);
+            break;
+          case core::EventType::StepTimeout:
+            ESP_LOGW(TAG,
+                     "Chime timed out: chord %u/%u not detected in [%" PRIu32 ", %" PRIu32 "] ms (elapsed %" PRIu32
+                     " ms)",
+                     (unsigned) (ev.step + 1), (unsigned) ev.num_steps, (unsigned long) ev.t_chord_ms,
+                     (unsigned long) ev.window_end_ms, (unsigned long) ev.elapsed_ms);
+            break;
+          default:
+            break;
         }
       }
       // Periodic diag like original
@@ -246,10 +314,12 @@ void ChimeComponent::loop() {
         float spec_max = *std::max_element(spec.begin(), spec.end());
         float floor_min = *std::min_element(floor.begin(), floor.end());
         float floor_max = *std::max_element(floor.begin(), floor.end());
-        ESP_LOGD(TAG, "[diag] spectrum min/max=%.1f/%.1f dB | noise-floor min/max=%.1f/%.1f dB (ready=yes)", spec_min, spec_max, floor_min, floor_max);
-        for (size_t d = 0; d < chimes_.size(); ++d) log_chime_diagnostics_(d, chimes_[d]);
+        ESP_LOGD(TAG, "[diag] spectrum min/max=%.1f/%.1f dB | noise-floor min/max=%.1f/%.1f dB (ready=yes)", spec_min,
+                 spec_max, floor_min, floor_max);
+        for (size_t d = 0; d < chimes_.size(); ++d)
+          log_chime_diagnostics_(d, chimes_[d]);
       }
-      continue; // check if another tick is immediately ready (rare)
+      continue;  // check if another tick is immediately ready (rare)
     }
 
     // Not ready to emit; try to stage more samples
@@ -258,7 +328,8 @@ void ChimeComponent::loop() {
     // Now stage from audio_source
     audio_source_->fill(0, false);
     const uint32_t available = stream_info.bytes_to_samples(audio_source_->available());
-    if (available == 0) break;
+    if (available == 0)
+      break;
     const int16_t *data = reinterpret_cast<const int16_t *>(audio_source_->mutable_data());
     const uint32_t need = window_size_ - frame_buf_offset_;
     const uint32_t take = std::min(available, need);
@@ -271,7 +342,8 @@ void ChimeComponent::loop() {
       // Don't increment glue counters – engine tracks internally. But we still need to loop to poll emit.
     }
     // If we still have more available and tick not full, loop again
-    if (available > take) continue;
+    if (available > take)
+      continue;
     // If we filled one window, try emit next iteration without consuming more
     // To avoid busy loop, break if no emit and no more data
     // Check if engine now has enough to emit (will be checked at top of next loop iter)
@@ -280,78 +352,117 @@ void ChimeComponent::loop() {
   }
 
   // Sync any remaining state changes (e.g., pattern_active cleared inside feed but not yet synced)
-  for (size_t i = 0; i < chimes_.size(); ++i) chimes_[i].sync_from_core(engine_.chime(i));
+  for (size_t i = 0; i < chimes_.size(); ++i)
+    chimes_[i].sync_from_core(engine_.chime(i));
 }
 
 void ChimeComponent::process_frame_(const int16_t *samples) { engine_.feed_pcm(samples, window_size_); }
 void ChimeComponent::emit_tick_() {
-  std::vector<core::Event> evs; engine_.try_emit_tick(millis(), evs, nullptr);
-  for (size_t i = 0; i < chimes_.size(); ++i) chimes_[i].sync_from_core(engine_.chime(i));
+  std::vector<core::Event> evs;
+  engine_.try_emit_tick(millis(), evs, nullptr);
+  for (size_t i = 0; i < chimes_.size(); ++i)
+    chimes_[i].sync_from_core(engine_.chime(i));
 }
-void ChimeComponent::compute_local_background_() { /* handled inside engine */ }
+void ChimeComponent::compute_local_background_() { /* handled inside engine */
+}
 bool ChimeComponent::bin_is_busy_(uint32_t filter_idx) const {
   for (size_t i = 0; i < chimes_.size(); ++i) {
     const auto &c = engine_.chime(i);
-    if (!c.pattern_active) continue;
-    for (auto &chord : c.chord_filter_indices) for (uint32_t idx : chord) if (idx == filter_idx) return true;
+    if (!c.pattern_active)
+      continue;
+    for (auto &chord : c.chord_filter_indices)
+      for (uint32_t idx : chord)
+        if (idx == filter_idx)
+          return true;
   }
   return false;
 }
 void ChimeComponent::log_chime_diagnostics_(size_t d, const Chime &c) {
-  if (c.pattern_chords_.empty()) return;
-  uint32_t num_steps = (uint32_t)c.pattern_chords_.size();
+  if (c.pattern_chords_.empty())
+    return;
+  uint32_t num_steps = (uint32_t) c.pattern_chords_.size();
   uint32_t step = 0;
-  if (c.pattern_active_) step = std::min<uint32_t>(c.match_index_, num_steps - 1);
+  if (c.pattern_active_)
+    step = std::min<uint32_t>(c.match_index_, num_steps - 1);
   const auto &indices = c.chord_filter_indices_[step];
   const auto &freqs = c.pattern_chords_[step];
   uint32_t t_ms = (step < c.pattern_times_ms_.size()) ? c.pattern_times_ms_[step] : NO_TIME;
-  ESP_LOGD(TAG, "[diag] Chime[%lu]: state=%s, waiting for step %u/%lu (%s)", (unsigned long)d, c.pattern_active_ ? "ACTIVE" : "idle", (unsigned)step, (unsigned long)num_steps, t_ms == NO_TIME ? "any time" : "timed");
-  if (!engine_.noise_floor_ready() || engine_.spectrum_db().empty()) return;
+  ESP_LOGD(TAG, "[diag] Chime[%lu]: state=%s, waiting for step %u/%lu (%s)", (unsigned long) d,
+           c.pattern_active_ ? "ACTIVE" : "idle", (unsigned) step, (unsigned long) num_steps,
+           t_ms == NO_TIME ? "any time" : "timed");
+  if (!engine_.noise_floor_ready() || engine_.spectrum_db().empty())
+    return;
   const auto &spec = engine_.spectrum_db();
   const auto &floor = engine_.noise_floor();
   const auto &local = engine_.local_bg();
   const auto &onset = engine_.onset_contrast();
   for (size_t i = 0; i < indices.size() && i < freqs.size(); ++i) {
     uint32_t idx = indices[i];
-    if (idx >= spec.size()) continue;
+    if (idx >= spec.size())
+      continue;
     float db = spec[idx];
     float eff = c.threshold_db_;
     float nf = floor[idx];
     float adaptive = nf + c.snr_margin_db_;
-    if (adaptive > eff) eff = adaptive;
+    if (adaptive > eff)
+      eff = adaptive;
     bool thr_ok = db >= eff;
     float lb = local[idx];
     bool prom_ok = (db - lb) >= c.prominence_db_;
     float onsetv = onset[idx];
     bool onset_ok = onsetv >= c.onset_contrast_db_;
-    ESP_LOGD(TAG, "   bin#%lu %.0fHz: db=%.1f | thr eff=%.1f (hard %.1f, floor %.1f + %.1f) = %s | localbg=%.1f prom=%+.1f (need %.1f) = %s | onset=%+.1f (need %.1f) = %s",
-             (unsigned long)idx, freqs[i], db, eff, c.threshold_db_, nf, c.snr_margin_db_, thr_ok?"PASS":"FAIL", lb, (db-lb), c.prominence_db_, prom_ok?"PASS":"FAIL", onsetv, c.onset_contrast_db_, onset_ok?"PASS":"FAIL");
+    ESP_LOGD(TAG,
+             "   bin#%lu %.0fHz: db=%.1f | thr eff=%.1f (hard %.1f, floor %.1f + %.1f) = %s | localbg=%.1f prom=%+.1f "
+             "(need %.1f) = %s | onset=%+.1f (need %.1f) = %s",
+             (unsigned long) idx, freqs[i], db, eff, c.threshold_db_, nf, c.snr_margin_db_, thr_ok ? "PASS" : "FAIL",
+             lb, (db - lb), c.prominence_db_, prom_ok ? "PASS" : "FAIL", onsetv, c.onset_contrast_db_,
+             onset_ok ? "PASS" : "FAIL");
   }
 }
 
 void ChimeComponent::start() {
-  if (microphone_source_->is_passive()) { ESP_LOGW(TAG, "Cannot start microphone in passive mode"); return; }
+  if (microphone_source_->is_passive()) {
+    ESP_LOGW(TAG, "Cannot start microphone in passive mode");
+    return;
+  }
   microphone_source_->start();
 }
 void ChimeComponent::stop() {
-  if (microphone_source_->is_passive()) { ESP_LOGW(TAG, "Cannot stop microphone in passive mode"); return; }
+  if (microphone_source_->is_passive()) {
+    ESP_LOGW(TAG, "Cannot stop microphone in passive mode");
+    return;
+  }
   microphone_source_->stop();
 }
 
 bool ChimeComponent::start_() {
-  if (audio_source_ != nullptr) return true;
+  if (audio_source_ != nullptr)
+    return true;
   const auto &stream_info = microphone_source_->get_audio_stream_info();
   const size_t bpf = stream_info.frames_to_bytes(1);
   ring_buffer_.reset();
   const size_t rb_size = (stream_info.ms_to_bytes(RING_BUFFER_DURATION_MS) / bpf) * bpf;
   auto rb = ring_buffer::RingBuffer::create(rb_size);
-  if (rb == nullptr) { status_momentary_error("ring_buffer", 15000); return false; }
+  if (rb == nullptr) {
+    status_momentary_error("ring_buffer", 15000);
+    return false;
+  }
   std::shared_ptr<ring_buffer::RingBuffer> rb_shared(std::move(rb));
-  audio_source_ = audio::RingBufferAudioSource::create(rb_shared, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS), (uint8_t)bpf);
-  if (audio_source_ == nullptr) { status_momentary_error("audio_source", 15000); return false; }
+  audio_source_ =
+      audio::RingBufferAudioSource::create(rb_shared, stream_info.ms_to_bytes(MAX_FILL_DURATION_MS), (uint8_t) bpf);
+  if (audio_source_ == nullptr) {
+    status_momentary_error("audio_source", 15000);
+    return false;
+  }
   ring_buffer_ = rb_shared;
   frame_buf_ = static_cast<int16_t *>(malloc((window_size_ + 1) * sizeof(int16_t)));
-  if (frame_buf_ == nullptr) { ESP_LOGE(TAG, "Failed to allocate frame buffer"); audio_source_.reset(); ring_buffer_.reset(); status_momentary_error("frame_buf", 15000); return false; }
+  if (frame_buf_ == nullptr) {
+    ESP_LOGE(TAG, "Failed to allocate frame buffer");
+    audio_source_.reset();
+    ring_buffer_.reset();
+    status_momentary_error("frame_buf", 15000);
+    return false;
+  }
   frame_buf_offset_ = 0;
   engine_.reset_onset_history();
   // Reset engine streaming state counters (but keep noise floor)
@@ -366,7 +477,10 @@ bool ChimeComponent::start_() {
 }
 void ChimeComponent::stop_() {
   audio_source_.reset();
-  if (frame_buf_ != nullptr) { free(frame_buf_); frame_buf_ = nullptr; }
+  if (frame_buf_ != nullptr) {
+    free(frame_buf_);
+    frame_buf_ = nullptr;
+  }
   frame_buf_offset_ = 0;
 }
 

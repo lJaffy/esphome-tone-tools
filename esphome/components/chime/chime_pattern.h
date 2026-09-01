@@ -13,7 +13,7 @@
 namespace esphome::chime::core {
 
 class ChimePattern {
-public:
+ public:
   explicit ChimePattern(const ChimeConfig &cfg);
   ChimePattern() = default;
 
@@ -43,19 +43,16 @@ public:
   }
 
   // Returns true if chord present; peak_db set to max bin dB in the chord.
-  bool chord_present(const float *spectrum_db, const float *noise_floor,
-                     const float *local_bg, const float *onset_contrast,
-                     uint8_t step, float &peak_db) const;
+  bool chord_present(const float *spectrum_db, const float *noise_floor, const float *local_bg,
+                     const float *onset_contrast, uint8_t step, float &peak_db) const;
 
   // Evaluate one tick. now_ms is the audio time of the tick (like
   // ChimeDetector.run nowMs). Emits 0..n Events via the callback (replaces
   // ESP_LOG + latch side-effects). Caller handles max-duration timeout and
   // release deadlines separately if desired, but this method handles step
   // timing, falling edge, and detection latch.
-  void evaluate_pattern(uint32_t now_ms, const float *spectrum_db,
-                        const float *noise_floor, const float *local_bg,
-                        const float *onset_contrast, uint32_t chime_index,
-                        uint32_t tick_index,
+  void evaluate_pattern(uint32_t now_ms, const float *spectrum_db, const float *noise_floor, const float *local_bg,
+                        const float *onset_contrast, uint32_t chime_index, uint32_t tick_index,
                         const std::function<void(const Event &)> &emit);
 
   // For diagnostics: per-bin gate snapshot (mirrors
@@ -71,16 +68,14 @@ public:
     float onset = 0;
     bool onset_ok = false;
   };
-  BinGate bin_gates(const float *spectrum_db, const float *noise_floor,
-                    bool noise_floor_ready, const float *local_bg,
+  BinGate bin_gates(const float *spectrum_db, const float *noise_floor, bool noise_floor_ready, const float *local_bg,
                     const float *onset_contrast, uint32_t filter_idx) const;
 
-private:
+ private:
   ChimeConfig cfg_;
   uint32_t tick_interval_ms_ = 100;
-  void latch_detection_(uint32_t now_ms, uint32_t elapsed_ms,
-                        uint32_t chime_index, uint32_t tick_index,
+  void latch_detection_(uint32_t now_ms, uint32_t elapsed_ms, uint32_t chime_index, uint32_t tick_index,
                         const std::function<void(const Event &)> &emit);
 };
 
-} // namespace esphome::chime::core
+}  // namespace esphome::chime::core

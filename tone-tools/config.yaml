@@ -1,0 +1,28 @@
+# https://developers.home-assistant.io/docs/apps/configuration#app-configuration
+name: Tone Tools Simulator
+version: "1.0.0"
+slug: tone-tools
+description: Interactive tuner for the ESPHome chime detector — upload recordings, tune gates, and export YAML. Runs the same C++ engine (WASM) as the ESP32 firmware.
+url: https://github.com/lJaffy/esphome-tone-tools
+arch:
+  - aarch64
+  - amd64
+  - armv7
+init: false
+ingress: true
+ingress_port: 8099
+ingress_stream: false
+panel_icon: mdi:bell-ring
+panel_title: Tone Tools
+hassio_api: true
+hassio_role: default
+host_network: false
+map:
+  - config:rw
+  - share:rw
+  - ssl:ro
+options:
+  log_level: info
+schema:
+  log_level: list(trace|debug|info|notice|warning|error|fatal)?
+image: ghcr.io/ljaffy/app-tone-tools-{arch}

@@ -1,0 +1,4 @@
+configuration:
+  log_level:
+    name: Log level
+    description: Set the log level for the app. Use debug/trace for troubleshooting.

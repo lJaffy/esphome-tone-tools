@@ -2,7 +2,7 @@ import esphome.codegen as cg
 from esphome.components import microphone, web_server_base
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 import esphome.config_validation as cv
-from esphome.const import CONF_ID
+from esphome.const import CONF_ID, CONF_MAX_DURATION, CONF_MICROPHONE
 
 AUTO_LOAD = ["audio", "ring_buffer", "web_server_base"]
 DEPENDENCIES = ["microphone", "network"]
@@ -12,9 +12,7 @@ CODEOWNERS = ["lJaffy"]
 mic_streamer_ns = cg.esphome_ns.namespace("mic_streamer")
 MicStreamer = mic_streamer_ns.class_("MicStreamer", cg.Component)
 
-CONF_MICROPHONE = "microphone"
 CONF_ALLOW_WITHOUT_AUTH = "allow_without_auth"
-CONF_MAX_DURATION = "max_duration"
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(

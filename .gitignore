@@ -290,3 +290,6 @@ __marimo__/
 
 # Keep WASM build Makefile despite global Makefile ignore
 !util/Makefile
+
+.ignore
+scratch/
