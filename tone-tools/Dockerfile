@@ -1,12 +1,11 @@
-ARG BUILD_FROM
+ARG BUILD_FROM=ghcr.io/home-assistant/base:latest
 FROM ${BUILD_FROM}
 
 ARG BUILD_VERSION
 ARG BUILD_ARCH
 ARG TEMPIO_VERSION=2021.09.0
 
-RUN apk add --no-cache nginx python3 py3-pip bash jq curl \
-    && pip3 install --no-cache-dir flask gunicorn \
+RUN apk add --no-cache nginx python3 py3-flask py3-gunicorn bash jq curl \
     && rm -rf /var/cache/apk/* \
     && if [ -z "${BUILD_ARCH}" ]; then BUILD_ARCH="$(uname -m)"; fi \
     && case "${BUILD_ARCH}" in \
