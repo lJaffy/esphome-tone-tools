@@ -1,12 +1,8 @@
 """ESPHome component: chime – detects timed tone sequences using Goertzel."""
 
-from esphome import automation, pins
+from esphome import automation
 import esphome.codegen as cg
 from esphome.components import binary_sensor, microphone
-try:
-    from esphome.components.adc import validate_adc_pin
-except ImportError:
-    validate_adc_pin = None  # type: ignore[assignment]
 import esphome.config_validation as cv
 from esphome.const import (
     CONF_DURATION,
@@ -21,9 +17,13 @@ from esphome.const import (
 
 AUTO_LOAD = ["audio", "binary_sensor"]
 CODEOWNERS = ["@lJaffy"]
+<<<<<<< HEAD
 # Keep DEPENDENCIES on frequency (dsp lives under frequency/dsp, fundamental)
 # so `components: [chime, frequency]` is required; frequency alone remains installable.
 DEPENDENCIES = ["frequency"]
+=======
+DEPENDENCIES = ["microphone"]
+>>>>>>> parent of d468977 (ADC sensor type, generic frequency sensor)
 
 
 CONF_PASSIVE = "passive"
@@ -39,13 +39,6 @@ CONF_ONSET_CONTRAST_DB = "onset_contrast_db"
 CONF_GUARD_SEPARATION_HZ = "guard_separation_hz"
 CONF_NOISE_FLOOR_ALPHA_DOWN = "noise_floor_alpha_down"
 CONF_NOISE_FLOOR_ALPHA_UP = "noise_floor_alpha_up"
-
-# ADC source (exclusive with microphone) – mechanically coupled pipe / piezo
-CONF_ADC = "adc"
-CONF_ADC_PIN = "pin"
-CONF_ADC_ATTENUATION = "attenuation"
-CONF_SAMPLE_RATE = "sample_rate"
-CONF_ADC_GAIN = "adc_gain"
 
 chime_ns = cg.esphome_ns.namespace("chime")
 ChimeComponent = chime_ns.class_("ChimeComponent", cg.Component)
@@ -138,67 +131,16 @@ CHIME_SCHEMA = binary_sensor.binary_sensor_schema().extend(
 )
 
 
-# ── ADC source schema (exclusive with microphone) ──
-# validate_adc_pin is the canonical ESPHome helper that also registers the
-# pin as an ADC channel; fall back to a plain GPIO pin schema if the import
-# is unavailable (e.g. in stripped test checkout).
-if validate_adc_pin is not None:
-    _ADC_PIN_VALIDATOR = validate_adc_pin  # type: ignore[assignment]
-else:  # pragma: no cover – fallback for external checkout / unit tests
-    try:
-        _ADC_PIN_VALIDATOR = pins.internal_gpio_input_pin_number  # type: ignore[attr-defined]
-    except AttributeError:
-        import esphome.config_validation as _cv_fallback  # type: ignore[no-redef]
-
-        _ADC_PIN_VALIDATOR = _cv_fallback.int_range(min=0, max=48)  # type: ignore[assignment]
-
-ADC_ATTENUATIONS = {
-    "0db": "ADC_ATTEN_DB_0",
-    "2.5db": "ADC_ATTEN_DB_2_5",
-    "6db": "ADC_ATTEN_DB_6",
-    "11db": "ADC_ATTEN_DB_11",
-    # alias for 12db boards that map to 11db internally
-    "12db": "ADC_ATTEN_DB_12",
-}
-
-ADC_SCHEMA = cv.Schema(
-    {
-        cv.Required(CONF_ADC_PIN): _ADC_PIN_VALIDATOR,
-        cv.Optional(CONF_ADC_ATTENUATION, default="11db"): cv.one_of(
-            *ADC_ATTENUATIONS, lower=True
-        ),
-        cv.Optional(CONF_SAMPLE_RATE, default=16000): cv.All(
-            cv.int_, cv.Range(min=4000, max=48000)
-        ),
-        # mirrors microphone.gain_factor – simple linear multiplier 1..64
-        cv.Optional(CONF_ADC_GAIN, default=1): cv.int_range(min=1, max=64),
-    }
-)
-
-
-def _validate_source(config):
-    has_mic = CONF_MICROPHONE in config
-    has_adc = CONF_ADC in config
-    if has_mic == has_adc:
-        raise cv.Invalid(
-            "Specify exactly one of 'microphone' or 'adc' (exclusive source). "
-            "Use 'microphone:' for acoustic I2S/PDM mics or 'adc:' with a pin for "
-            "mechanically-coupled pipe/piezo sensors."
-        )
-    return config
-
-
 # ── Component schema ──
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(ChimeComponent),
-            cv.Optional(CONF_MICROPHONE): microphone.microphone_source_schema(
+            cv.Required(CONF_MICROPHONE): microphone.microphone_source_schema(
                 min_bits_per_sample=16,
                 max_bits_per_sample=16,
             ),
-            cv.Optional(CONF_ADC): ADC_SCHEMA,
             cv.Required(CONF_PASSIVE): cv.boolean,
             cv.Optional(CONF_WINDOW_SIZE, default=1024): cv.int_range(min=64, max=4096),
             cv.Optional(CONF_TICK_INTERVAL, default="100ms"): cv.All(
@@ -223,7 +165,6 @@ CONFIG_SCHEMA = cv.All(
             ),
         }
     ).extend(cv.COMPONENT_SCHEMA),
-    _validate_source,
     cv.only_on([PLATFORM_ESP32]),
 )
 
@@ -235,27 +176,10 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    if CONF_MICROPHONE in config:
-        mic_source = await microphone.microphone_source_to_code(
-            config[CONF_MICROPHONE], passive=config[CONF_PASSIVE]
-        )
-        cg.add(var.set_microphone_source(mic_source))
-        cg.add(var.set_passive(config[CONF_PASSIVE]))
-    else:
-        adc_cfg = config[CONF_ADC]
-        pin = adc_cfg[CONF_ADC_PIN]
-        # validate_adc_pin returns a pin number / object; extract raw GPIO num
-        # for C++ (InternalGPIOPin has .number). Handle both forms.
-        try:
-            pin_num = pin.number  # type: ignore[union-attr]
-        except AttributeError:
-            pin_num = int(pin)
-        atten_cpp = ADC_ATTENUATIONS[adc_cfg[CONF_ADC_ATTENUATION].lower()]
-        cg.add(var.set_adc_pin(pin_num))
-        cg.add(var.set_adc_attenuation(cg.RawExpression(atten_cpp)))
-        cg.add(var.set_adc_sample_rate(adc_cfg[CONF_SAMPLE_RATE]))
-        cg.add(var.set_adc_gain(adc_cfg[CONF_ADC_GAIN]))
-        cg.add(var.set_passive(config[CONF_PASSIVE]))
+    mic_source = await microphone.microphone_source_to_code(
+        config[CONF_MICROPHONE], passive=config[CONF_PASSIVE]
+    )
+    cg.add(var.set_microphone_source(mic_source))
     cg.add(var.set_window_size(config[CONF_WINDOW_SIZE]))
     cg.add(var.set_tick_interval(config[CONF_TICK_INTERVAL]))
     cg.add(var.set_guard_separation_hz(config[CONF_GUARD_SEPARATION_HZ]))

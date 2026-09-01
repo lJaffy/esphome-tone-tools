@@ -1,5 +1,8 @@
 #include "chime_engine.h"
+<<<<<<< HEAD
 #include "../frequency/dsp/goertzel.h"
+=======
+>>>>>>> parent of d468977 (ADC sensor type, generic frequency sensor)
 
 #include <algorithm>
 #include <cmath>
@@ -69,7 +72,10 @@ void ChimeEngine::build_frequency_map() {
   // Allocate/resize DSP vectors to new nf, and rebuild window / sample-rate dep
   // state if already known
   window_.assign(det_cfg_.window_size, 0.0f);
-  esphome::dsp::make_hann_window(window_.data(), det_cfg_.window_size);
+  for (uint32_t i = 0; i < det_cfg_.window_size; ++i) {
+    window_[i] = 0.5f * (1.0f - cosf(2.0f * (float)M_PI * (float)i /
+                                     (float)(det_cfg_.window_size - 1)));
+  }
   ensure_buffers_();
   if (sample_rate_hz_ > 0)
     set_sample_rate(sample_rate_hz_);
@@ -98,15 +104,24 @@ void ChimeEngine::set_sample_rate(float fs) {
   if (global_freqs_.empty() || total_filters_ == 0)
     return;
   uint32_t n = det_cfg_.window_size;
+  float nyquist = fs / 2.0f;
   effective_freqs_.resize(total_filters_);
   for (uint32_t t = 0; t < total_filters_; ++t) {
-    float freq = esphome::dsp::clamp_freq(global_freqs_[t], fs);
+    float freq = global_freqs_[t];
+    if (freq < 20.0f)
+      freq = 20.0f;
+    if (freq > nyquist - 20.0f)
+      freq = nyquist - 20.0f;
     effective_freqs_[t] = freq;
-    g_c2_[t] = esphome::dsp::goertzel_coeff(freq, fs, n);
+    float k = (freq * static_cast<float>(n)) / fs;
+    g_c2_[t] = 2.0f * cosf(2.0f * (float)M_PI * k / static_cast<float>(n));
   }
   // Rebuild window in case window_size changed
   window_.assign(n, 0.0f);
-  esphome::dsp::make_hann_window(window_.data(), n);
+  for (uint32_t i = 0; i < n; ++i) {
+    window_[i] =
+        0.5f * (1.0f - cosf(2.0f * (float)M_PI * (float)i / (float)(n - 1)));
+  }
   dsp_ready_ = true;
 }
 
@@ -155,8 +170,24 @@ void ChimeEngine::feed_pcm(const int16_t *samples, size_t count) {
 }
 
 void ChimeEngine::process_frame_(const int16_t *samples) {
-  esphome::dsp::goertzel_frame(samples, window_.data(), g_c2_.data(), g_v1_.data(), g_v2_.data(), accum_.data(),
-                               det_cfg_.window_size, total_filters_);
+  uint32_t n = det_cfg_.window_size;
+  uint32_t nf = total_filters_;
+  for (uint32_t t = 0; t < nf; ++t) {
+    g_v1_[t] = 0.0f;
+    g_v2_[t] = 0.0f;
+  }
+  for (uint32_t i = 0; i < n; ++i) {
+    const float x = (static_cast<float>(samples[i]) / 32768.0f) * window_[i];
+    for (uint32_t t = 0; t < nf; ++t) {
+      const float v = g_c2_[t] * g_v1_[t] - g_v2_[t] + x;
+      g_v2_[t] = g_v1_[t];
+      g_v1_[t] = v;
+    }
+  }
+  for (uint32_t t = 0; t < nf; ++t) {
+    const float v1 = g_v1_[t], v2 = g_v2_[t];
+    accum_[t] += v1 * v1 + v2 * v2 - g_c2_[t] * v1 * v2;
+  }
 }
 
 void ChimeEngine::compute_local_background_() {
@@ -230,7 +261,8 @@ bool ChimeEngine::try_emit_tick(uint32_t now_ms, std::vector<Event> &out_events,
   float inv = 1.0f / static_cast<float>(frame_count_);
   for (uint32_t t = 0; t < total_filters_; ++t) {
     accum_[t] *= inv;
-    spectrum_db_[t] = esphome::dsp::power_to_db(accum_[t], ref);
+    float p = accum_[t];
+    spectrum_db_[t] = (p > 0.0f) ? 10.0f * log10f(p / ref) : -300.0f;
   }
 
   compute_local_background_();
