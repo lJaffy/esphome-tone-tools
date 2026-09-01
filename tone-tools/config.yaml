@@ -9,15 +9,10 @@ arch:
   - amd64
 init: false
 ingress: true
-ingress_port: 8099
-ingress_stream: false
 panel_icon: mdi:bell-ring
 panel_title: Tone Tools
 hassio_api: true
-hassio_role: default
-host_network: false
 map:
-  - config:rw
   - share:rw
   - ssl:ro
 options:
